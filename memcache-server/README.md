@@ -34,3 +34,23 @@ SocketChannel       -> Connected client (NIO/non-blocking)
 we will accept the connection and then we will read the data from the client and write the response back to the client
 for reading we will follow [length][data] format
 for writing we will follow [length][data] format
+
+
+now we will create cache and cacheitem
+cache will be a concurrent hashmap
+cacheitem will be a key value pair
+we will use the cache to store the data
+and we will use the cacheitem to store the data
+Similarly we will have command and command type
+command will be a key value pair
+command type will be a enum
+we will use the command to store the data
+and we will use the command type to figure out the type of the command
+and there will be command parser whose job is to parse the command
+
+
+we will have basically 4 layers
+network layer which will have -> server.java -> TCP sockets, threads and bytes in/out
+protocol layer which will have -> command.java -> command type, command parser
+data layer which will have -> cache.java -> cache, cache item
+logic layer which will have -> handler.java -> command handler 
