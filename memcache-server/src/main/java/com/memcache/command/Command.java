@@ -58,13 +58,14 @@ public class Command {
     }
 
     public String toString() {
+        String strValue = value != null ? new String(value) : "null";
         return "Command{" +
                 "type=" + type +
                 ", key='" + key + '\'' +
                 ", flags=" + flags +
                 ", expiry=" + expiry +
                 ", byteLength=" + byteLength +
-                ", value=" + new String(value) +
+                ", value=" + new String(strValue) +
                 '}';
     }
 }

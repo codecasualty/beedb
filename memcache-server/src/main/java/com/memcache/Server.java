@@ -14,16 +14,23 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import com.memcache.cache.Cache;
+import com.memcache.command.Command;
+import com.memcache.command.CommandParser;
+import com.memcache.handler.CommandProcessor;
+import com.memcache.response.Response;
+
 import java.util.Iterator;
 import java.util.Set;
 import java.nio.channels.SocketChannel;
-import java.security.Key;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 public class Server {
 
     ConcurrentLinkedQueue<Map.Entry<SelectionKey, ByteBuffer>> pendingWrites = new ConcurrentLinkedQueue<>();
+    Cache  cache = new Cache();
 
     public static void main(String[] args) throws IOException{
 
@@ -79,58 +86,85 @@ public class Server {
     }
 
 
-    private static final int MAX_BODY_SIZE = 1024 * 1024; // 1 MB
 
     public void read(Selector selector, SelectionKey key, ExecutorService executorService) throws IOException{
         SocketChannel socketChannel = (SocketChannel) key.channel();
 
-        ByteBuffer headerBuffer = ByteBuffer.allocate(4);
-        int headerRead = socketChannel.read(headerBuffer);
-        if(headerRead == -1){
+        // we have to read 4096 bytes to get the command and then ask command parse to give us length of bytes to read next
+        // then we have to read those many bytes and thats our complete command
+        // for example:-
+        // set foo 0 300 5\r\n
+        // hello
+        // that means first we read complete first line and then pass it to command parser to give us length of value bytes to read and then read
+        // those many bytes and thats our value
+        // we can use ByteBuffer to read bytes from socketChannel
+
+        ByteBuffer buffer = ByteBuffer.allocate(4096);
+        int read = socketChannel.read(buffer);
+        if(read == -1){
             key.cancel();
             socketChannel.close();
             return;
         }
-        if(headerBuffer.position() < 4) return;
-
-        headerBuffer.flip();
-        int expectedSize = headerBuffer.getInt();
-
-        if(expectedSize <= 0 || expectedSize > MAX_BODY_SIZE){
-            System.out.println("Invalid request");
-            key.cancel();
-            socketChannel.close();
+        buffer.flip();
+        StringBuilder commandLine = new StringBuilder();
+        while(buffer.hasRemaining()){
+            char c = (char) buffer.get();
+            if(c == '\r'){
+                break;
+            }
+            commandLine.append(c);
+        }
+        // below code ensure that we read \n after \r and \n is not part of command
+        if(buffer.hasRemaining()) buffer.get();
+        Command command = null;
+        byte[] valueBytes = null;
+        try{
+            command = CommandParser.parse(commandLine.toString());
+            System.out.println("command from client: " + command);
+            int valueLength = command.getByteLength();
+            if(valueLength >= 0){
+                valueBytes = new byte[valueLength];
+                for(int i = 0; i < valueLength; i++){
+                    valueBytes[i] = (byte) buffer.get();
+                }
+                command.setValue(valueBytes);
+            }
+        }catch (Exception e){
+            // TODO: handle exception
+            e.printStackTrace();
             return;
         }
-
-        ByteBuffer bodyBuffer = ByteBuffer.allocate(expectedSize);
-        while(bodyBuffer.hasRemaining()){
-            int bodyRead = socketChannel.read(bodyBuffer);
-            if(bodyRead == -1) break;
-            if(bodyRead == 0) continue;
-        }
-        bodyBuffer.flip();
-        System.out.println("request from client: " + new String(bodyBuffer.array(), 0, bodyBuffer.limit()));
 
         key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
-        byte[] data = bodyBuffer.array();
+        final Command cmd = command;
         executorService.execute(() -> {
-            byte[] response = processRequest(data);
-            ByteBuffer responseBuffer = ByteBuffer.wrap(response);
-            pendingWrites.add(Map.entry(key, responseBuffer));
-            key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-            selector.wakeup();
+            try{
+                byte[] response = processRequest(cmd);
+                ByteBuffer responseBuffer = ByteBuffer.wrap(response);
+                pendingWrites.add(Map.entry(key, responseBuffer));
+                key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                selector.wakeup();
+            }catch (Exception e){
+                // TODO: handle exception
+                e.printStackTrace();
+            }
         });
+
+        
     }
 
-    public byte[] processRequest(byte[] data){
-        // we need to return the response as length of data and data itself
-        byte[] response = new byte[data.length + 4];
-        ByteBuffer buffer = ByteBuffer.wrap(response);
-        buffer.putInt(data.length);
-        buffer.put(data);
-        buffer.flip();
-        return response;
+    public byte[] processRequest(Command command) throws Exception{
+        
+        try {
+            Response response = CommandProcessor.process(command, cache);
+            return response.toProtocolString().getBytes();
+        } catch (Exception e) {
+            // TODO: handle exception
+            e.printStackTrace();
+            return "ERROR\r\n".getBytes();
+            
+        }
     }
 
     public void write(SelectionKey key) throws IOException {
