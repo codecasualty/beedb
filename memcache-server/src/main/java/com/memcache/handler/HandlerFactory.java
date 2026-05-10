@@ -11,21 +11,14 @@ public class HandlerFactory {
                 return new GetHandler();
             case SET:
                 return new SetHandler();
-            // case ADD:
-            //     return new AddHandler();
-            // case REPLACE:
-            //     return new ReplaceHandler();
-            // case DELETE:
-            //     return new DeleteHandler();
-            // case INCREMENT:
-            //     return new IncrementHandler();
-            // case DECREMENT:
-            //     return new DecrementHandler();
-            // case APPEND:
-            //     return new AppendHandler();
-            // case PREPEND:
-            //     return new PrependHandler();
-            // case TOUCH:
+            case ADD:
+                return new AddHandler();
+            case REPLACE:
+                return new ReplaceHandler();
+            case APPEND:
+                return new AppendHandler();
+            case PREPEND:
+                return new PrependHandler();
             default:
                 return null;
         }

@@ -17,23 +17,18 @@ public class Client {
             while (scanner.hasNextLine()) {
                 String line = scanner.nextLine();
                 if (line.equals("quit")) break;
-
-                byte[] body = line.getBytes();
-                ByteBuffer buffer = ByteBuffer.allocate(4 + body.length);
-                buffer.putInt(body.length);
-                buffer.put(body);
-                buffer.flip();
+                line = line.replace("\\r", "\r").replace("\\n", "\n");
+                byte[] body = line.getBytes("UTF-8");
+                ByteBuffer buffer = ByteBuffer.wrap(body);
                 channel.write(buffer);
 
-                ByteBuffer responseHeader = ByteBuffer.allocate(4);
-                channel.read(responseHeader);
-                responseHeader.flip();
-                int responseSize = responseHeader.getInt();
-
-                ByteBuffer responseBody = ByteBuffer.allocate(responseSize);
-                channel.read(responseBody);
-                responseBody.flip();
-                System.out.println("Server: " + new String(responseBody.array(), 0, responseBody.limit()));
+                ByteBuffer responseBuffer = ByteBuffer.allocate(1024);
+                int bytesRead = channel.read(responseBuffer);
+                if (bytesRead > 0) {
+                    responseBuffer.flip();
+                    String response = new String(responseBuffer.array(), 0, bytesRead);
+                    System.out.println("Server: " + response);
+                }
             }
         }
     }

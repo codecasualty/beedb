@@ -34,12 +34,16 @@ public class Server {
 
     public static void main(String[] args) throws IOException{
 
+        int threads = 10;
+        if(args.length > 0){
+            threads = Integer.parseInt(args[0]);
+        }
         Server server = new Server();
-        server.start();
+        server.start(threads);
         
     }
     
-    public void start() throws IOException{
+    public void start(int threads) throws IOException{
         // selector to notify about new connections
         Selector selector = Selector.open();
         // server socket to listen for new connections
@@ -48,7 +52,7 @@ public class Server {
         serverSocketChannel.configureBlocking(false);
         serverSocketChannel.register(selector , SelectionKey.OP_ACCEPT);
     
-        ExecutorService executorService = Executors.newFixedThreadPool(10);
+        ExecutorService executorService = Executors.newFixedThreadPool(threads);
         // we keep on listening for connections and accept those connection
         // and create threads to work on those connections
         while(true){
@@ -113,12 +117,14 @@ public class Server {
             if(c == '\r'){
                 break;
             }
+            System.out.println("reading character : " + c);
             commandLine.append(c);
         }
         // below code ensure that we read \n after \r and \n is not part of command
         if(buffer.hasRemaining()) buffer.get();
         Command command = null;
         byte[] valueBytes = null;
+        System.out.println("command from client: " + commandLine.toString());
         try{
             command = CommandParser.parse(commandLine.toString());
             System.out.println("command from client: " + command);
@@ -130,9 +136,10 @@ public class Server {
                 }
                 command.setValue(valueBytes);
             }
-        }catch (Exception e){
-            // TODO: handle exception
-            e.printStackTrace();
+        }
+        catch (Exception e){
+            System.out.println("Error while parsing command : " + e.getMessage());
+            sendResponse(key, ("ERROR\r\n").getBytes(), selector);
             return;
         }
 
@@ -141,10 +148,7 @@ public class Server {
         executorService.execute(() -> {
             try{
                 byte[] response = processRequest(cmd);
-                ByteBuffer responseBuffer = ByteBuffer.wrap(response);
-                pendingWrites.add(Map.entry(key, responseBuffer));
-                key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-                selector.wakeup();
+                sendResponse(key, response, selector);
             }catch (Exception e){
                 // TODO: handle exception
                 e.printStackTrace();
@@ -152,6 +156,13 @@ public class Server {
         });
 
         
+    }
+
+    public void sendResponse(SelectionKey key, byte[] response, Selector selector) throws IOException{
+        ByteBuffer responseBuffer = ByteBuffer.wrap(response);
+        pendingWrites.add(Map.entry(key, responseBuffer));
+        key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+        selector.wakeup();
     }
 
     public byte[] processRequest(Command command) throws Exception{
