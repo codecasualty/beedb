@@ -79,5 +79,6 @@ timers
 
 external dependencies
 1. cluster configuration :- like how many nodes are in cluster and id of each of them so that it can communicate with other nodes
-
+2. nodeId :- id of the node
+3. cache :- cache is used to store the entries in memory 
  */

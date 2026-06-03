@@ -54,3 +54,66 @@ network layer which will have -> server.java -> TCP sockets, threads and bytes i
 protocol layer which will have -> command.java -> command type, command parser
 data layer which will have -> cache.java -> cache, cache item
 logic layer which will have -> handler.java -> command handler 
+
+
+
+### How propose() Works — Full Explanation
+propose() is the bridge between the memcache client world and the Raft world.
+
+Without Raft (current code):
+
+
+Client → "SET foo 0 0 3\r\nbar" → Server.java → CommandProcessor → Cache → "STORED"
+With Raft:
+
+
+Client → "SET foo 0 0 3\r\nbar" → Server.java → RaftNode.propose() → ??? → "STORED"
+The problem: replication takes time (network round-trips). Server.java can't just sit and block the NIO thread waiting. So propose() returns a CompletableFuture<String> immediately — "I'll give you the result when it's ready."
+
+The full propose() flow:
+
+
+1. Server.java calls raftNode.propose("set foo 0 0 3\r\nbar")
+
+2. RaftNode checks: am I the leader?
+   NO  → complete future with error "NOT_LEADER node2"
+         Server tells client to retry at node2
+   YES → continue
+
+3. Create a LogEntry(index=nextIndex, term=currentTerm, command="set foo...")
+   Append it to local log
+   Store a CompletableFuture in a map: pendingCommands.put(logIndex, future)
+
+4. Send AppendEntries to all followers (async)
+
+5. propose() returns the future immediately
+   Server.java attaches a callback: future.thenAccept(response → send to client)
+
+6. [Meanwhile, on a separate thread]
+   Followers ACK
+   Leader advances commitIndex
+   applyCommittedEntries() loop picks up the entry
+   Calls CommandProcessor.process(command, cache)
+   Gets back "STORED"
+   Completes the future: pendingCommands.get(logIndex).complete("STORED")
+
+7. Server.java's callback fires → sends "STORED" to client
+The pendingCommands map is the key piece:
+
+
+// in RaftNode
+private Map<Integer, CompletableFuture<String>> pendingCommands = new HashMap<>();
+
+// in propose():
+int index = log.lastIndex() + 1;
+CompletableFuture<String> future = new CompletableFuture<>();
+pendingCommands.put(index, future);
+log.append(new LogEntry(index, command, currentTerm, false));
+// send AppendEntries to peers...
+return future;
+
+// in applyCommittedEntries():
+String result = CommandProcessor.process(command, cache).toProtocolString();
+CompletableFuture<String> future = pendingCommands.remove(lastApplied);
+if (future != null) future.complete(result);
+The future ties the client's waiting request to the specific log index. When that index gets committed and applied, the future completes and the client gets their response.
