@@ -3,6 +3,7 @@ package com.memcache.raft;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -21,6 +22,9 @@ import com.memcache.raft.rpc.AppendEntriesRequest;
 import com.memcache.raft.rpc.AppendEntriesResponse;
 import com.memcache.raft.rpc.RequestVoteRequest;
 import com.memcache.raft.rpc.RequestVoteResponse;
+import com.memcache.handler.CommandProcessor;
+import com.memcache.response.Response;
+import com.memcache.response.ResponseStatus;
 public class RaftNode {
     
     // persistent fields
@@ -57,6 +61,10 @@ public class RaftNode {
     private String          nodeId;
     private Cache           cache;
 
+    // to store pending requests
+    private final Map<Integer, CompletableFuture<String>> pendingRequests;
+
+
 
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache){
         this.peerAddresses = peerAddresses;
@@ -68,6 +76,7 @@ public class RaftNode {
         this.rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
         this.applyExecutor = Executors.newSingleThreadExecutor();
         this.role = NodeRole.FOLLOWER;
+        this.pendingRequests = new ConcurrentHashMap<>();
         //  a timer to wait for heartbeat from leader
         resetElectionTimer();
         this.applyExecutor.submit(this::applyCommitedEntries);
@@ -279,7 +288,7 @@ public class RaftNode {
         boolean success  = response.isSuccess();
         PeerState state = peers.get(followerId);
         state.setMatchIndex(nextMatchIndex);
-        if(success) state.setNextIndex(state.getNextIndex() + 1);
+        if(success) state.setNextIndex(state.getMatchIndex() + 1);
         else if(state.getNextIndex() > 1 ) state.setNextIndex(state.getNextIndex() - 1);
 
     }
@@ -400,8 +409,25 @@ public class RaftNode {
     // it basically returns a completeable future <string> beaus string is sreturn type of our commands and 
     // completable future because its async in nature, we want to ensure that our entry is replicated to majority of nodes, 
     // leaders commit the entry , and apply loop executes the commadn in our cache, once all these 3 are done , we complete the future.
+    // we append an entry at log at index lets say n , and store completable future at index n in map
+    // and return future immediately , after that per thread replication starts, (replicationLoopForPeer)
+    // thta loops replicates our entry in all the peers and move the comimt index, while updating our commit index
+    // we call maybeadvancecommit() which notifies all waiting thread, that would wake up applycommitedentries threads
+    // and once we able to apply that entry to our cache we complete our future and return stored as result
     public CompletableFuture<String> propose(String command){
-        return null;
+
+        CompletableFuture<String> future = new CompletableFuture<>();
+        synchronized(this){
+            if(!isLeader()){
+                future.completeExceptionally(new IllegalStateException("Not leader: " + leaderId));
+                return future;
+            }
+            int index = log.lastIndex() + 1;
+            log.append(new LogEntry(index, command, currentTerm, false));
+            pendingRequests.put(index, future);
+        }
+
+        return future;
     }
 
     // backgroud loop which applied commited entires to our cache
@@ -417,8 +443,19 @@ public class RaftNode {
                 }
                 lastApplied++;
                 LogEntry entry = log.get(lastApplied);
-                Command command = Command.deserialize(entry.getCommand());
-                cache.put(command.getKey(), command.getValue(), command.getFlags(), command.getExpiry());
+                Response response = null;
+                if(!entry.isNoOp()) {
+                    Command command = Command.deserialize(entry.getCommand());
+                    try{
+                        response = CommandProcessor.process(command, cache);
+                    }catch(Exception e){
+                        e.printStackTrace();
+                    }
+
+                }
+                CompletableFuture<String> future = pendingRequests.remove(lastApplied);
+                if(future != null && response != null) future.complete(response.toProtocolString());
+                else if(future != null) future.complete("SERVER_ERROR\r\n");
             }
         }
     }

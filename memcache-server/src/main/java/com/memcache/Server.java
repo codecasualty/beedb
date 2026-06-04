@@ -14,12 +14,16 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import com.memcache.cache.Cache;
 import com.memcache.command.Command;
 import com.memcache.command.CommandParser;
+import com.memcache.command.CommandType;
 import com.memcache.handler.CommandProcessor;
 import com.memcache.response.Response;
+import com.memcache.raft.RaftNode;
 
 import java.util.Iterator;
 import java.util.Set;
@@ -27,11 +31,12 @@ import java.nio.channels.SocketChannel;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Arrays;
 public class Server {
 
     ConcurrentLinkedQueue<Map.Entry<SelectionKey, ByteBuffer>> pendingWrites = new ConcurrentLinkedQueue<>();
-    Cache  cache = new Cache();
-
+    RaftNode  raftNode;
+    Cache  cache ;
     public static void main(String[] args) throws IOException{
 
         int threads = 10;
@@ -45,6 +50,8 @@ public class Server {
     
     public void start(int threads) throws IOException{
         // selector to notify about new connections
+        cache = new Cache();
+        raftNode = new RaftNode(Arrays.asList("127.0.0.1:11211"), "1", cache);
         Selector selector = Selector.open();
         // server socket to listen for new connections
         ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
@@ -52,7 +59,8 @@ public class Server {
         serverSocketChannel.configureBlocking(false);
         serverSocketChannel.register(selector , SelectionKey.OP_ACCEPT);
     
-        ExecutorService executorService = Executors.newFixedThreadPool(threads);
+        // we will use virtual threads instead of fixed thread pool 
+        ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
         // we keep on listening for connections and accept those connection
         // and create threads to work on those connections
         while(true){
@@ -168,8 +176,20 @@ public class Server {
     public byte[] processRequest(Command command) throws Exception{
         
         try {
-            Response response = CommandProcessor.process(command, cache);
-            return response.toProtocolString().getBytes();
+            if(command.getType() == CommandType.GET){
+                Response response = CommandProcessor.process(command, cache);
+                return response.toProtocolString().getBytes();
+            }
+            else{
+                // we have to propose this command to raft node
+                // and get the output future from propose method
+                Future<String> future = raftNode.propose(command.serialize());
+                // we have to wait for the response from raft node
+                // .get() blocks until response is available so we have used timeout
+                String response = future.get(5 , TimeUnit.SECONDS);
+                System.out.println("response from raft node : " + response);
+                return response.getBytes();
+            }                
         } catch (Exception e) {
             // TODO: handle exception
             e.printStackTrace();
