@@ -1,20 +1,25 @@
 package com.memcache.raft.rpc;
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.memcache.raft.LogEntry;
 /*
 this class denotes the append entry request send by leader to follower
  */
 public class AppendEntriesRequest {
-
+    
     private int         term;
     private String      leaderId;
     private int         prevLogIndex;
     private int         prevLogTerm;
     private int         leaderCommit;
     private List<LogEntry> entries;
-
-    public AppendEntriesRequest(int term, String leaderId, int prevLogIndex, int prevLogTerm, int leaderCommit, List<LogEntry> entries) {
+    
+    @JsonCreator
+    public AppendEntriesRequest(@JsonProperty("term") int term, @JsonProperty("leaderId") String leaderId,
+    @JsonProperty("prevLogIndex") int prevLogIndex, @JsonProperty("prevLogTerm") int prevLogTerm, 
+    @JsonProperty("leaderCommit") int leaderCommit, @JsonProperty("entries") List<LogEntry> entries) {
         this.term = term;
         this.leaderId = leaderId;
         this.prevLogIndex = prevLogIndex;

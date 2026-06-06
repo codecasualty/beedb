@@ -2,6 +2,8 @@
 
 package com.memcache.raft.rpc;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 /*
 this class denotes the request which is sent by candiate , requesting for vote thus the name is requestVote request
  */
@@ -18,7 +20,9 @@ public class RequestVoteRequest {
     private int     lastLogTerm;
     private String  candidateId;
 
-    public RequestVoteRequest(int term, int lastLogIndex, int lastLogTerm, String candidateId) {
+    @JsonCreator
+    public RequestVoteRequest(@JsonProperty("term") int term, @JsonProperty("lastLogIndex") int lastLogIndex,
+    @JsonProperty("lastLogTerm") int lastLogTerm, @JsonProperty("candidateId") String candidateId) {
         this.term = term;
         this.lastLogIndex = lastLogIndex;
         this.lastLogTerm = lastLogTerm;

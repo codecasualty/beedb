@@ -1,5 +1,8 @@
 package com.memcache.raft;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class LogEntry {
 
     /*
@@ -12,8 +15,8 @@ public class LogEntry {
     private final String  command;
     private final int     term;
     private final boolean noOp;
-
-    public LogEntry(int index, String command, int term, boolean noOp){
+    @JsonCreator
+    public LogEntry(@JsonProperty("index") int index, @JsonProperty("command") String command, @JsonProperty("term") int term, @JsonProperty("noOp") boolean noOp) {
         this.index = index;
         this.command = command;
         this.term = term;
