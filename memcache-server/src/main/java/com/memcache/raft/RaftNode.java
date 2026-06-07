@@ -15,7 +15,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 import java.util.Arrays;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.Socket;
+import java.net.UnknownHostException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.memcache.cache.Cache;
 import com.memcache.command.Command;
 import com.memcache.raft.rpc.AppendEntriesRequest;
@@ -24,7 +30,8 @@ import com.memcache.raft.rpc.RequestVoteRequest;
 import com.memcache.raft.rpc.RequestVoteResponse;
 import com.memcache.handler.CommandProcessor;
 import com.memcache.response.Response;
-import com.memcache.response.ResponseStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 public class RaftNode {
     
     // persistent fields
@@ -49,7 +56,7 @@ public class RaftNode {
     // for timer management
     private final ScheduledExecutorService scheduler;
     private       ScheduledFuture<?>       electionTimeoutFuture;
-    private       ScheduledFuture<?>       heartbeatTimeoutFuture;
+    // private       ScheduledFuture<?>       heartbeatTimeoutFuture;
     // for network communication
     private final ExecutorService          rpcExecutor;
     // for applying the log, when we receives response from followers we apply the log and update the nextindex and match index and commit logs as well
@@ -64,7 +71,10 @@ public class RaftNode {
     // to store pending requests
     private final Map<Integer, CompletableFuture<String>> pendingRequests;
 
+    // object mapper (jackson) to convert objects to json and vice versa
+    private ObjectMapper objectMapper;
 
+    private Logger LOGGER = LoggerFactory.getLogger(RaftNode.class.getName());
 
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache){
         this.peerAddresses = peerAddresses;
@@ -77,13 +87,14 @@ public class RaftNode {
         this.applyExecutor = Executors.newSingleThreadExecutor();
         this.role = NodeRole.FOLLOWER;
         this.pendingRequests = new ConcurrentHashMap<>();
+        this.objectMapper = new ObjectMapper();
         //  a timer to wait for heartbeat from leader
         resetElectionTimer();
         this.applyExecutor.submit(this::applyCommitedEntries);
     }
     
     private synchronized void startElection(){
-
+        LOGGER.info("startElection for term {} by {}", currentTerm, nodeId);
         if(isLeader()) return;
         transitionToCandidate();
         resetElectionTimer(); 
@@ -113,7 +124,9 @@ public class RaftNode {
 
     private synchronized int requestVoteFromPeers(){
         int votes = 1;
+        LOGGER.info("requestVoteFromPeers for term {} by {}", currentTerm, nodeId);
         RequestVoteRequest request = buildReqestVoteRequest();
+        LOGGER.info("current term {} and node id {} requesting vote from peers and request {}", currentTerm, nodeId, request);
         List<RequestVoteResponse> responses = sendVotesRequestInParallel(request);
         for(RequestVoteResponse response: responses){
             if(response.getTerm() > currentTerm){
@@ -126,11 +139,14 @@ public class RaftNode {
     }
 
     private List<RequestVoteResponse> sendVotesRequestInParallel(RequestVoteRequest request){
+        // any exception throws by sendRequestVoteToPeer will be caught by exception handler , they are stored in future and unwrapped at future.get()
+        // and then caught by catch block so no issues over here.
         List<Future<RequestVoteResponse>> futures = peerAddresses.stream()
         .map(peer -> rpcExecutor.submit(() -> {
             return sendRequestVoteToPeer(peer, request);
         })).collect(Collectors.toList());
         List<RequestVoteResponse> responses = new ArrayList<>();
+        LOGGER.info("current term {} and node id {} sending vote request to peers {} and request {} futures {}", currentTerm, nodeId, peerAddresses, request, futures);
         for(Future<RequestVoteResponse> future: futures){
             try{
                 RequestVoteResponse response = future.get(150, TimeUnit.MILLISECONDS);
@@ -138,22 +154,53 @@ public class RaftNode {
                     responses.add(response);
             }catch(Exception e){
                 // not able to get response from other nodes, either peer unreachable or timeout
-                e.printStackTrace();
+                LOGGER.error("Exception in sendVotesRequestInParallel {} ", e.getMessage());
             }
         }
         return responses;
     }
 
-    private RequestVoteResponse sendRequestVoteToPeer(String peer, RequestVoteRequest request){
-        return null;
+    private RequestVoteResponse sendRequestVoteToPeer(String peer, RequestVoteRequest request) throws UnknownHostException, IOException {  
+        String[] address = peer.split(":");
+        int port = Integer.parseInt(address[1]);
+        String ip = address[0]; 
+        RequestVoteResponse response = null;
+        // here one thing to note is that , what if our peer is down or unreachable, in that case socket.close() wont make sense and will throw error
+        // so we will use conventional java pattern for resource cleanup 
+        // Socket implements closeable so no need to explicitly close it
+        LOGGER.info("current term {} and node id {} sending vote request to peer {} and request {} ", currentTerm, nodeId, peer, request);
+        try(Socket socket = new Socket(ip, port)){
+            socket.setSoTimeout(100);
+            // to create a json envelope
+            Map<String , Object> envelope = Map.of(
+                "rpcType" , "REQUEST_VOTE",
+                "payload" , request
+            );
+            String json = objectMapper.writeValueAsString(envelope)+"\n";
+            socket.getOutputStream().write(json.getBytes());
+            socket.getOutputStream().flush();
+            LOGGER.info("current term {} and node id {} written to socket {} and request {} ", currentTerm, nodeId, socket, request);
+            // we can use buffered reader to read response from socket as readline will read till \n or \r\n so its better to use it
+            BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            String line = bufferedReader.readLine();
+            RequestVoteResponse requestVoteResponse = objectMapper.readValue(line, RequestVoteResponse.class);
+            LOGGER.info("current term {} and node id {} read from socket {} and request {} ", currentTerm, nodeId, socket, request);
+            return requestVoteResponse;
+        }catch(Exception e){
+            e.printStackTrace();
+            LOGGER.info("current term {} and node id {} leader is {} and follower is {} request is {} ", currentTerm, nodeId, leaderId, peer, request);
+            LOGGER.info("Exception in sendRequestVoteToPeer", e);
+        }
+        return response;
     }
 
     private void stepDownDueToHigherTerm(int term){
+        LOGGER.info("current term {} and node id {} stepping down due to higher term {} ", currentTerm, nodeId, term);
         currentTerm = term;
         votedFor = null;
         transitionToFollower();
         resetElectionTimer();
-        cancelHeartbeatTimer();
+        // cancelHeartbeatTimer();
     }
     private RequestVoteRequest buildReqestVoteRequest(){
         return new RequestVoteRequest(currentTerm, log.lastIndex(), log.lastTerm(), nodeId);
@@ -175,7 +222,7 @@ public class RaftNode {
         clearPeerState();
         appendNoOpEntryToLog();
         startPerPeerReplicationThread();
-        scheduleHeartbeat();
+        // scheduleHeartbeat();
     }
 
     
@@ -207,12 +254,27 @@ public class RaftNode {
     }
 
     private void replicationLoopForPeer(String peer){
+        // network related failure , sleep time
+        int networkFailureSleepTime = 200;
+        LOGGER.info("current term {} and node id {} replication loop for peer {} ", currentTerm, nodeId, peer);
         while(isLeader()){
             
             final AppendEntriesRequest request = getAppendEntriesRequest(peer);
+            LOGGER.info("current term {} and node id {} sending reqplication request {} to peer {} ", currentTerm, nodeId, request, peer);
             AppendEntriesResponse response = sendAppendEntriesToPeerInParallel(request , peer);
-            if(response == null) continue;
-            // we are adding sleep because , if we dont have anything else to replicate, withoout sleep we will continously replicate emtpy entries
+            LOGGER.info("current term {} and node id {} response from peer {} ", currentTerm, nodeId, peer);
+            if(response == null){
+                // if our response is null , try after some time , this is to avoid infinite loop
+                // in case of some network issue
+                try{
+                    Thread.sleep(networkFailureSleepTime);
+                    networkFailureSleepTime = Math.min(networkFailureSleepTime * 2, 1000);
+                }catch(InterruptedException e){
+                    e.printStackTrace();
+                }
+                continue;
+            } 
+            // we are adding sleep because , if we dont have anything else to replicate, withoout sleep we will continously overwhelm the system
             // which will flood the system , also our while loop is tight spin , meaning it will keep on sending heartbeats/appendentries continously
             if(response.isSuccess() && request.getEntries().isEmpty()){
                 try{
@@ -227,8 +289,9 @@ public class RaftNode {
                     stepDownDueToHigherTerm(response.getTerm());
                     return;
                 }
-                updatePeerState(response);
+                updatePeerState(response , peer);
                 mayBeAdvanceCommitIndex();
+                networkFailureSleepTime = 200;
             }
         }
     }
@@ -253,21 +316,21 @@ public class RaftNode {
         return noOp;
     }
 
-    private void scheduleHeartbeat(){
-        // we need to send heartbeats to all peers
-        // send heratbeats every 50 ms
-        heartbeatTimeoutFuture = scheduler.scheduleAtFixedRate(() -> {
-            // start election
-            sendHeartbeats();
-        }, 0,50, TimeUnit.MILLISECONDS);
-    }
+    // private void scheduleHeartbeat(){
+    //     // we need to send heartbeats to all peers
+    //     // send heratbeats every 50 ms
+    //     heartbeatTimeoutFuture = scheduler.scheduleAtFixedRate(() -> {
+    //         // start election
+    //         sendHeartbeats();
+    //     }, 0,50, TimeUnit.MILLISECONDS);
+    // }
 
-    private void cancelHeartbeatTimer(){
-        if(heartbeatTimeoutFuture != null){
-            heartbeatTimeoutFuture.cancel(false);
-            heartbeatTimeoutFuture = null;
-        }
-    }
+    // private void cancelHeartbeatTimer(){
+    //     if(heartbeatTimeoutFuture != null){
+    //         heartbeatTimeoutFuture.cancel(false);
+    //         heartbeatTimeoutFuture = null;
+    //     }
+    // }
 
     private synchronized AppendEntriesRequest getAppendEntriesRequest(String peer){
         int prevIndex = peers.get(peer).getNextIndex() - 1;
@@ -277,27 +340,60 @@ public class RaftNode {
         return new AppendEntriesRequest(currentTerm , nodeId , prevIndex, prevTerm, commitIndex , list);
     }
     // its importatnt to use sychronized keyword in updatedpeerstate because if we dont use 
-    // we may think that all we are doing is modifying result or entry of only the follower which is present in response, but we should forget that 
+    // we may think that all we are doing is modifying result or entry of only the follower which is present in response, but we should not forget that 
     // our map (peers) is not concurrent map , that means, if multiple threads tries to read from it even though different entries or keys , it might misbehave
     // so its better to use concurrent map or use synchronized methods to avoid race conditions.
     // for example one thread trying to read some other entry in this updatepeerstate , but some other thread in some other method trying to read that same entry both can have
     // inconsistent info/result available which would be difficult to trace without proper synchronization mechanism
-    private synchronized void updatePeerState(AppendEntriesResponse response){
+    private synchronized void updatePeerState(AppendEntriesResponse response, String peer){
         String followerId = response.getFollowerId();
+        String peerAddress = peer;
         int nextMatchIndex = response.getMatchIndex();
         boolean success  = response.isSuccess();
-        PeerState state = peers.get(followerId);
+        PeerState state = peers.get(peerAddress);
         state.setMatchIndex(nextMatchIndex);
         if(success) state.setNextIndex(state.getMatchIndex() + 1);
         else if(state.getNextIndex() > 1 ) state.setNextIndex(state.getNextIndex() - 1);
 
     }
     // this method shouldn't be synchronized because we are using virtual threads to replicate the log and we dont want to block the main thread
+    // and each virtual thread is handling replication to single node, so there is no need of synchronization among them.
     private  AppendEntriesResponse sendAppendEntriesToPeerInParallel(AppendEntriesRequest request, String peer){
-        return null;
+        String[] address = peer.split(":");
+        int port = Integer.parseInt(address[1]);
+        String ip = address[0];
+        AppendEntriesResponse response = null;
+        LOGGER.info("current term {} and node id {} sending append entries request {} to peer {} ", currentTerm, nodeId, request, peer);
+        try(Socket socket = new Socket(ip , port)){
+            socket.setSoTimeout(100);
+
+            // first make json envelope
+            // jackson can serialize appendentriesrequest automatically because it has getters
+            Map<String , Object> envelope = Map.of(
+                "rpcType" , "APPEND_ENTRIES",
+                "payload", request
+            );
+            String json = objectMapper.writeValueAsString(envelope)+"\r\n";
+            // write this into sockets output stream 
+            socket.getOutputStream().write(json.getBytes());
+            socket.getOutputStream().flush();
+            LOGGER.info("current term {} and node id {} written to socket {} and request {} ", currentTerm, nodeId, socket, request);
+            // now we will receive respose from nodes , read it 
+            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            String socketResponse = reader.readLine();
+            response = objectMapper.readValue(socketResponse, AppendEntriesResponse.class);
+            LOGGER.info("current term {} and node id {} read from socket {} and request {} ", currentTerm, nodeId, socket, request);
+            return response;
+
+        }catch(Exception e){
+            e.printStackTrace();
+            LOGGER.info("current term {} and node id {} leader is {} and follower is {} request is {} ", currentTerm, nodeId, leaderId, peer, request);
+            LOGGER.info("Exception in sendAppendEntriesToPeerInParallel", e);
+        }
+        return response;
     }
-    private synchronized void sendHeartbeats(){
-    }
+    // private synchronized void sendHeartbeats(){
+    // }
 
     public synchronized RequestVoteResponse handleRequestVote(RequestVoteRequest requestVoteRequest){
         // some node is asking for vote
@@ -307,7 +403,7 @@ public class RaftNode {
         // becaues it can happen that in cluster of 5 nodes , due to partition a group of nodes can keep on particicpating in election becaues they are not able to reach
         // to majority thus just having more/larger term does not gurantee that the node is supposed to be leader, but it does mean that the current node was not part of all those
         // terms and there fore its better to step down and let all nodes agree on this current term and then continue the leader election process.
-
+        LOGGER.info("current term {} and node id {} handling request vote request {} ", currentTerm, nodeId, requestVoteRequest);
         RequestVoteResponse response = buildRequestVoteResponse(false);
         // we have gone through more election terms so we are more updated than the node who is asking for vote thus its best not to grant it vote
         if(requestVoteRequest.getTerm() < currentTerm){
@@ -325,9 +421,11 @@ public class RaftNode {
                 votedFor = requestVoteRequest.getCandidateId();
                 resetElectionTimer();
                 response.setVoteGranted(true);
+                LOGGER.info("current term {} and node id {} vote granted for term {} ", currentTerm, nodeId, requestVoteRequest.getTerm());
                 return response;
             }
         }
+        LOGGER.info("current term {} and node id {} vote denied for term {} ", currentTerm, nodeId, requestVoteRequest.getTerm());
         return response;
     }
 
@@ -355,7 +453,7 @@ public class RaftNode {
     the response matchIndex = last log index we have successfully appended in our log
      */
     public synchronized AppendEntriesResponse handleAppendEntries(AppendEntriesRequest request){
-        
+        LOGGER.info("current term {} and node id {} handling append entries request {} ", currentTerm, nodeId, request);
         AppendEntriesResponse  response = builAppendEntriesResponse();
         if(request.getTerm() < currentTerm){
             return response;
@@ -365,7 +463,7 @@ public class RaftNode {
             stepDownDueToHigherTerm(request.getTerm());
         }
 
-        if(role == NodeRole.LEADER)cancelHeartbeatTimer();
+        // if(role == NodeRole.LEADER)cancelHeartbeatTimer();
         transitionToFollower();
 
         leaderId = request.getLeaderId();
@@ -377,7 +475,7 @@ public class RaftNode {
         }
         // if the node which is asking us to append entry has updated log then we can safely append it in our log
         log.truncateFrom(request.getPrevLogIndex() + 1);
-        for(LogEntry entry : request.getEntries()) if(!entry.isNoOp())log.append(entry);
+        for(LogEntry entry : request.getEntries())log.append(entry);
 
         // as we have updated our log , we need to move/change our commit index as well
         if(request.getLeaderCommit() > commitIndex)
@@ -391,6 +489,7 @@ public class RaftNode {
         response.setMatchIndex(log.lastIndex());
         response.setSuccess(true);
         response.setTerm(currentTerm);
+        LOGGER.info("current term {} and node id {} append entries response {} ", currentTerm, nodeId, response);
         return response;
 
     }

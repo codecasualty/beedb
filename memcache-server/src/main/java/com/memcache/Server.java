@@ -6,6 +6,7 @@
  */
 
 package com.memcache;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -23,39 +24,68 @@ import com.memcache.command.CommandParser;
 import com.memcache.command.CommandType;
 import com.memcache.handler.CommandProcessor;
 import com.memcache.response.Response;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.memcache.raft.RaftNode;
+import com.memcache.raft.RaftRpcServer;
 
 import java.util.Iterator;
 import java.util.Set;
 import java.nio.channels.SocketChannel;
 import java.nio.ByteBuffer;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Arrays;
+import java.util.ArrayList;
 public class Server {
 
     ConcurrentLinkedQueue<Map.Entry<SelectionKey, ByteBuffer>> pendingWrites = new ConcurrentLinkedQueue<>();
     RaftNode  raftNode;
     Cache  cache ;
-    public static void main(String[] args) throws IOException{
+    RaftRpcServer raftRpcServer;
+    private Logger LOGGER = LoggerFactory.getLogger(Server.class.getName());
 
-        int threads = 10;
-        if(args.length > 0){
-            threads = Integer.parseInt(args[0]);
+    public static void main(String[] args) throws IOException{
+        // read file name
+        String fileName = args[0];
+        // read properties file
+        Properties properties = new Properties();
+        try(
+            FileInputStream fileInputStream = new FileInputStream(fileName);
+        ){
+            properties.load(fileInputStream);
+            
+            ArrayList<String> peers = new ArrayList<>();
+            for(String peer : properties.getProperty("peers").split(",")){
+                peers.add(peer);
+            }
+            String nodeId = properties.getProperty("nodeId");
+            int clientPort = Integer.parseInt(properties.getProperty("clientPort"));
+            int raftPort = Integer.parseInt(properties.getProperty("raftPort"));
+            Server server = new Server();
+            server.start(peers, nodeId , clientPort , raftPort);
+
+        }catch(Exception e){
+            e.printStackTrace();
         }
-        Server server = new Server();
-        server.start(threads);
         
     }
     
-    public void start(int threads) throws IOException{
+    public void start(ArrayList<String> peers, String nodeId, int clientPort,int raftPort) throws IOException{
         // selector to notify about new connections
+        if(peers.size() == 0) throw new IllegalArgumentException("No peers provided");
+        if(nodeId == null) throw new IllegalArgumentException("No nodeId provided");
         cache = new Cache();
-        raftNode = new RaftNode(Arrays.asList("127.0.0.1:11211"), "1", cache);
+        raftNode = new RaftNode(peers, nodeId, cache);
+        raftRpcServer = new RaftRpcServer(raftPort, raftNode);
+        raftRpcServer.start();
         Selector selector = Selector.open();
         // server socket to listen for new connections
         ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
-        serverSocketChannel.bind(new InetSocketAddress(11211));
+        serverSocketChannel.bind(new InetSocketAddress(clientPort));
         serverSocketChannel.configureBlocking(false);
         serverSocketChannel.register(selector , SelectionKey.OP_ACCEPT);
     
@@ -94,7 +124,7 @@ public class Server {
         socket.setSoTimeout(1000);
         SocketChannel.configureBlocking(false);
         SocketChannel.register(selector, SelectionKey.OP_READ);
-        System.out.println("Accepted connection "+ socket.getInetAddress());
+        LOGGER.info("Accepted connection {} ", socket.getInetAddress());
     }
 
 
@@ -125,7 +155,7 @@ public class Server {
             if(c == '\r'){
                 break;
             }
-            System.out.println("reading character : " + c);
+            LOGGER.info("reading character : {} ", c);
             commandLine.append(c);
         }
         // below code ensure that we read \n after \r and \n is not part of command
@@ -135,7 +165,7 @@ public class Server {
         System.out.println("command from client: " + commandLine.toString());
         try{
             command = CommandParser.parse(commandLine.toString());
-            System.out.println("command from client: " + command);
+            LOGGER.info("command from client: {}", command);
             int valueLength = command.getByteLength();
             if(valueLength >= 0){
                 valueBytes = new byte[valueLength];
@@ -146,7 +176,7 @@ public class Server {
             }
         }
         catch (Exception e){
-            System.out.println("Error while parsing command : " + e.getMessage());
+            LOGGER.info("Error while parsing command : {} ", e.getMessage());
             sendResponse(key, ("ERROR\r\n").getBytes(), selector);
             return;
         }
@@ -187,7 +217,7 @@ public class Server {
                 // we have to wait for the response from raft node
                 // .get() blocks until response is available so we have used timeout
                 String response = future.get(5 , TimeUnit.SECONDS);
-                System.out.println("response from raft node : " + response);
+                LOGGER.info("response from raft node : {}", response);
                 return response.getBytes();
             }                
         } catch (Exception e) {
@@ -205,7 +235,7 @@ public class Server {
         SelectionKey  selectionKey = entry.getKey();
         SocketChannel socketChannel = (SocketChannel) selectionKey.channel();
         ByteBuffer responseBuffer = entry.getValue();
-        System.out.println("writing response to client "+ new String(responseBuffer.array(), 0, responseBuffer.limit()));
+        LOGGER.info("writing response to client {} ", new String(responseBuffer.array(), 0, responseBuffer.limit()));
         while(responseBuffer.hasRemaining()){
             socketChannel.write(responseBuffer);
         }// making selector ready for read operation

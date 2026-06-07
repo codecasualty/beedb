@@ -63,4 +63,13 @@ public class RequestVoteRequest {
     public void setCandidateId(String candidateId) {
         this.candidateId = candidateId;
     }
+
+    public String toString(){
+        return "RequestVoteRequest{" +
+                "term=" + term +
+                ", lastLogIndex=" + lastLogIndex +
+                ", lastLogTerm=" + lastLogTerm +
+                ", candidateId='" + candidateId + '\'' +
+                '}';
+    }
 }

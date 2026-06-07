@@ -1,5 +1,8 @@
 package com.memcache.raft.rpc;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 /*
 this class denotes the response send by the follower to the leader to tell whether it has appended the entries or not
  */
@@ -15,8 +18,8 @@ public class AppendEntriesResponse {
     private String  followerId;
     private int     matchIndex;
 
-
-    public AppendEntriesResponse(boolean success, int term, String followerId, int matchIndex) {
+    @JsonCreator
+    public AppendEntriesResponse(@JsonProperty("success") boolean success,@JsonProperty("term") int term,@JsonProperty("followerId") String followerId,@JsonProperty("matchIndex") int matchIndex) {
         this.success = success;
         this.term = term;
         this.followerId = followerId;
