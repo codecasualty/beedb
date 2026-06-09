@@ -9,7 +9,8 @@ import java.util.Scanner;
 public class Client {
 
     public static void main(String[] args) throws IOException {
-        try (SocketChannel channel = SocketChannel.open(new InetSocketAddress("localhost", 11211));
+        int clientPort = Integer.parseInt(args[0]);
+        try (SocketChannel channel = SocketChannel.open(new InetSocketAddress("localhost", clientPort));
              Scanner scanner = new Scanner(System.in)) {
 
             System.out.println("Connected to server. Type a message and press Enter:");

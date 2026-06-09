@@ -78,4 +78,15 @@ public class AppendEntriesRequest {
     public void setEntries(List<LogEntry> entries) {
         this.entries = entries;
     }
+
+    public String toString(){
+        return "AppendEntriesRequest{" +
+                "term=" + term +
+                ", leaderId='" + leaderId + '\'' +
+                ", prevLogIndex=" + prevLogIndex +
+                ", prevLogTerm=" + prevLogTerm +
+                ", leaderCommit=" + leaderCommit +
+                ", entries=" + entries +
+                '}';
+    }
 }

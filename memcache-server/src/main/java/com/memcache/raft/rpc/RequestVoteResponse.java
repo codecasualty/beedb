@@ -47,4 +47,7 @@ public class RequestVoteResponse {
         this.voteGranted = voteGranted;
     }
 
+    public String toString() {
+        return "{\"followerId\":\"" + followerId + "\",\"term\":" + term + ",\"voteGranted\":" + voteGranted + "}";
+    }
 }

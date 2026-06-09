@@ -1,11 +1,14 @@
 package com.memcache.raft;
 
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 
 public class RaftLog {
     
     private List<LogEntry> logEntries;
+    private Logger LOGGER = LoggerFactory.getLogger(RaftLog.class.getName());
 
     public RaftLog(List<LogEntry> log) {
         this.logEntries = log;
@@ -38,6 +41,7 @@ public class RaftLog {
 
     // this is for vote restriction , we want to make sure that we are electing the competent leader
     public boolean isUpToDate(int index, int term){
+        LOGGER.info("index {} term {} & we currently have lastindex {} lastterm {} ", index, term, lastIndex(), lastTerm());
         LogEntry lastLog = logEntries.get(logEntries.size() - 1);
         int currentTerm = lastLog.getTerm();
         int currentIndex = lastLog.getIndex();

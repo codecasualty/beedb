@@ -60,4 +60,13 @@ public class AppendEntriesResponse {
     public void setMatchIndex(int matchIndex) {
         this.matchIndex = matchIndex;
     }
+
+    public String toString(){
+        return "AppendEntriesResponse{" +
+                "success=" + success +
+                ", term=" + term +
+                ", followerId='" + followerId + '\'' +
+                ", matchIndex=" + matchIndex +
+                '}';
+    }
 }
