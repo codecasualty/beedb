@@ -41,7 +41,7 @@ public class RaftLog {
 
     // this is for vote restriction , we want to make sure that we are electing the competent leader
     public boolean isUpToDate(int index, int term){
-        LOGGER.info("index {} term {} & we currently have lastindex {} lastterm {} ", index, term, lastIndex(), lastTerm());
+        LOGGER.info("index {} term {} & current lastindex {} lastterm {} ", index, term, lastIndex(), lastTerm());
         LogEntry lastLog = logEntries.get(logEntries.size() - 1);
         int currentTerm = lastLog.getTerm();
         int currentIndex = lastLog.getIndex();

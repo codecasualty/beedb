@@ -24,6 +24,8 @@ import com.memcache.command.CommandParser;
 import com.memcache.command.CommandType;
 import com.memcache.handler.CommandProcessor;
 import com.memcache.response.Response;
+import com.memcache.raft.SocketRaftTransport;
+import com.memcache.raft.RaftTransport;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +49,7 @@ public class Server {
     Cache  cache ;
     RaftRpcServer raftRpcServer;
     private Logger LOGGER = LoggerFactory.getLogger(Server.class.getName());
+    private RaftTransport raftTransport;
 
     public static void main(String[] args) throws IOException{
         // read file name
@@ -79,7 +82,8 @@ public class Server {
         if(peers.size() == 0) throw new IllegalArgumentException("No peers provided");
         if(nodeId == null) throw new IllegalArgumentException("No nodeId provided");
         cache = new Cache();
-        raftNode = new RaftNode(peers, nodeId, cache);
+        raftTransport = new SocketRaftTransport();
+        raftNode = new RaftNode(peers, nodeId, cache , raftTransport);
         raftRpcServer = new RaftRpcServer(raftPort, raftNode);
         raftRpcServer.start();
         Selector selector = Selector.open();

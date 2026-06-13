@@ -1,5 +1,7 @@
 package com.memcache.cache;
 
+import java.nio.charset.StandardCharsets;
+
 public class CacheItem {
     private String      key;
     private byte[]      value;
@@ -42,7 +44,7 @@ public class CacheItem {
     public String toString() {
         return "CacheItem{" +
                 "key='" + key + '\'' +
-                ", value=" + new String(value) +
+                ", value=" + new String(value, StandardCharsets.UTF_8) +
                 ", expiresAt=" + expiresAt +
                 ", infiniteExpiry=" + infiniteExpiry +
                 ", flags=" + flags +
