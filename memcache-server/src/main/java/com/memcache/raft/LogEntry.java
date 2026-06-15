@@ -39,5 +39,14 @@ public class LogEntry {
     public boolean isNoOp() {
         return noOp;
     }
+
+    public String toString(){
+        return "LogEntry{" +
+                "index=" + index +
+                ", command='" + command + '\'' +
+                ", term=" + term +
+                ", noOp=" + noOp +
+                '}';
+    }
     
 }

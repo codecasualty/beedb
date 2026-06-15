@@ -85,6 +85,7 @@ public class Server {
         raftTransport = new SocketRaftTransport();
         raftNode = new RaftNode(peers, nodeId, cache , raftTransport);
         raftRpcServer = new RaftRpcServer(raftPort, raftNode);
+        raftNode.start();
         raftRpcServer.start();
         Selector selector = Selector.open();
         // server socket to listen for new connections

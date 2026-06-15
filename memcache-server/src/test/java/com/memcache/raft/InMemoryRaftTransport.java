@@ -25,10 +25,15 @@ public class InMemoryRaftTransport implements RaftTransport {
         raftNodes.put(nodeIP, raftNode);
     }
 
+    public void removeRaftNode(String nodeIP){
+        raftNodes.remove(nodeIP);
+    }
+
     @Override
     public RequestVoteResponse sendRequestVoteToPeer(RequestVoteRequest request, String peer) {
         LOGGER.info("Vote Request by node {} to peer{} request is {} ", request.getCandidateId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
+        if(raftNode == null) return null;
         return raftNode.handleRequestVote(request);
     }
 
@@ -36,6 +41,7 @@ public class InMemoryRaftTransport implements RaftTransport {
     public AppendEntriesResponse sendAppendEntriesToPeer(AppendEntriesRequest request, String peer) {
         LOGGER.info("Append Entry Req by node {} to peer{} request is {} ", request.getLeaderId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
+        if(raftNode == null) return null;
         return raftNode.handleAppendEntries(request);
     }
 }
