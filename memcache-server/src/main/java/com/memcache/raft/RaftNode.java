@@ -292,11 +292,12 @@ public class RaftNode{
             LOGGER.info("term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
             AppendEntriesResponse response = transport.sendAppendEntriesToPeer(request , peer);
             // AppendEntriesResponse response = sendAppendEntriesToPeerInParallel(request , peer);
-            LOGGER.info("term {} node id {} response from peer {} ", currentTerm, nodeId, peer);
+            LOGGER.info("term {} node id {} response from peer {} is -> {} ", currentTerm, nodeId, peer, response);
             if(response == null){
                 // if our response is null , try after some time , this is to avoid infinite loop
                 // in case of some network issue
                 try{
+                    LOGGER.info("Response from peer {} was null....Going in sleep ", peer);
                     Thread.sleep(networkFailureSleepTime);
                     // increase the network failure sleep time by a factor of 2 and max it by 1000 ms
                     networkFailureSleepTime = Math.min(networkFailureSleepTime * 2, 1000);
@@ -311,6 +312,8 @@ public class RaftNode{
             if(response.isSuccess() && request.getEntries().isEmpty()){
                 try{
                     // sleep for 100 ms
+                    LOGGER.info("Response from peer{} was success but the request was no op Entry {} ", peer, request);
+                    LOGGER.info("Soo , Going in Sleeeeeeeepzzzzzzzzzzzzzz");
                     Thread.sleep(100);
                 }catch(InterruptedException e){
                     LOGGER.error("Inteerupted during sleep in replication loop for peer but response was received {} ", peer);
@@ -606,6 +609,9 @@ public class RaftNode{
         rpcExecutor.shutdown();
     }
 
+    public synchronized int getTerm(){
+        return currentTerm;
+    }
 
 
 }
