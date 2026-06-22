@@ -377,7 +377,7 @@ public class RaftClusterTest {
         // note this does not mean its applied to cache, that is done by another apply committed entry threads
         // so we wait for atleast 300-400 ms and then check on all the followers whether the entries are applied correctly 
         // or not.
-        // the reason behind waiting at least 300ms is, because apply committed entry has sleep of 100 ms
+        // the reason behind waiting at least 300ms is, because replication loop has sleep of 100 ms
         // so we account for network delay and that would be total of 300ms
 
         RaftNode leader = findLeader();
@@ -413,6 +413,71 @@ public class RaftClusterTest {
             }
         }
         
+    }
+
+    @Test
+    public void shouldNotGrantVoteToStaleCandidate() throws InterruptedException{
+        // the idea is to first find leader, then remove any one follower and then insert data in cluster, 
+        // then remove leader and attach that removed follower in our cluster, now check the next leader shouldn't be this newly attached follower
+        // as its stale
+        RaftNode leader = findLeader();
+        RaftNode follower = null;
+        for(RaftNode node : raftNodesList){
+            if(node == leader) continue;
+            raftTransport.removeRaftNode(raftNodeAddress.get(node));
+            follower = node;
+            break;
+        }
+
+        assertNotNull(follower);
+        Command command = new Command(CommandType.SET, "Foo", 0, 0, 3);
+        command.setValue(("bar").getBytes());
+
+        CompletableFuture<String> response = leader.propose(command.serialize());
+        try{
+            String result = response.get(100, TimeUnit.MILLISECONDS);
+            assertEquals("STORED\r\n" , result);
+        }catch(Exception e){
+            e.printStackTrace();
+            fail("value is not stored in cluster -- there is no point continuing further");
+        }
+
+        raftTransport.removeRaftNode(raftNodeAddress.get(leader));
+        raftNodesList.remove(leader);
+        leader.stop();
+
+        raftTransport.addRaftNode(raftNodeAddress.get(follower), follower);
+        // waiting for election process to complete
+        Thread.sleep(500);
+
+        RaftNode newLeader = findLeader();
+        assertNotEquals(follower.getNodeId(), newLeader.getNodeId());
+    }
+
+
+    @Test
+    public void shouldNotGetLeaderIdDuringElection() throws InterruptedException{
+        RaftNode leader = findLeader();
+        raftTransport.removeRaftNode(raftNodeAddress.get(leader));
+        raftNodesList.remove(leader);
+        leader.stop();
+        Command command = new Command(CommandType.SET , "Foo", 0, 0 ,3);
+        command.setValue("bar".getBytes());
+        String serializedString = command.serialize();
+        for(RaftNode node : raftNodesList){
+            CompletableFuture<String> future = node.propose(serializedString);
+            try{
+                future.get();
+                LOGGER.info("This must have been exception but its not exception ");
+                fail("Test failed, Expected Exception :- Election in progress");
+
+            }catch(Exception e){
+                LOGGER.info("exceptin is {}" , e.getCause());
+                assertTrue(e.getCause() instanceof IllegalStateException);
+            }
+
+        }
+
     }
 
 }

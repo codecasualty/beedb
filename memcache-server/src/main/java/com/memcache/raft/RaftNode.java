@@ -102,6 +102,7 @@ public class RaftNode{
         LOGGER.info("startElection for term {} by {}", currentTerm, nodeId);
         synchronized(this){
             if(isLeader()) return;
+            leaderId = null;
             transitionToCandidate();
             resetElectionTimer(); 
         }
@@ -527,7 +528,8 @@ public class RaftNode{
         CompletableFuture<String> future = new CompletableFuture<>();
         synchronized(this){
             if(!isLeader()){
-                future.completeExceptionally(new IllegalStateException("Not leader: " + leaderId));
+                String message = leaderId == null ? "Election in progress" : "Not Leader: ";
+                future.completeExceptionally(new IllegalStateException(message + leaderId));
                 return future;
             }
             int index = log.lastIndex() + 1;

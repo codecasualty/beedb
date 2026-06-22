@@ -1,6 +1,7 @@
 package com.memcache.cache;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 
 public class Cache {
     
@@ -35,5 +36,9 @@ public class Cache {
 
     public boolean containsKey(String key) {
         return this.get(key) != null;
+    }
+
+    public Set<String> getKeySet(){
+        return map.keySet();
     }
 }
