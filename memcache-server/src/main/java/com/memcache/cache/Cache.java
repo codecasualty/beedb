@@ -1,7 +1,9 @@
 package com.memcache.cache;
 
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.Set;
+import java.util.Map;
+import java.util.stream.Collectors;
+
 
 public class Cache {
     
@@ -38,7 +40,16 @@ public class Cache {
         return this.get(key) != null;
     }
 
-    public Set<String> getKeySet(){
-        return map.keySet();
+    public Map<String, CacheItem> getState(){
+        long now = System.currentTimeMillis();
+        return map.entrySet().stream()
+                .filter(entry -> entry.getValue().isInfiniteExpiry() || entry.getValue().getExpiresAt() > now)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
+
+    public void restoreState(Map<String , CacheItem> state){
+        map.clear();
+        map.putAll(state);
+    }
+
 }

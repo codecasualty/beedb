@@ -9,6 +9,9 @@ public class RaftLog {
     
     private List<LogEntry> logEntries;
     private Logger LOGGER = LoggerFactory.getLogger(RaftLog.class.getName());
+    // these two vars denote, how many entries and for which term we have snapshotted
+    private int lastIncludedIndex;
+    private int lastIncludedTerm;
 
     public RaftLog(List<LogEntry> log) {
         this.logEntries = log;
@@ -32,11 +35,11 @@ public class RaftLog {
         // here we are using sublist to truncate the log entries, because its memory efficient , avoid copying data 
         // this means from index to end of list we will remove all the entries  
         // because subList returns a view of the list we will need to remove/clear out the entries from the original list
-        logEntries.subList(index, logEntries.size()).clear();
+        logEntries.subList(index - lastIncludedIndex, logEntries.size()).clear();
     }
 
     public List<LogEntry> getFrom(int fromIndex){
-        return new ArrayList<LogEntry>(logEntries.subList(fromIndex, logEntries.size()));
+        return new ArrayList<LogEntry>(logEntries.subList(fromIndex - lastIncludedIndex, logEntries.size()));
     }
 
     // this is for vote restriction , we want to make sure that we are electing the competent leader
@@ -55,6 +58,14 @@ public class RaftLog {
     // we want to make sure that we are not accepting stale/wrong entries, if leader sends some entry at particular index
     // and lets say we have entry at that index and its not the same as what leader is sending then we will reject that entry
     public boolean hasMatchAt(int index, int term){
+        // let say we have take snapshot of entries till lastincluded index that means those entries after taking snapshot
+        // must've been removed from log , so we can compare them and if we have take snapshot there is no need to compare them as we
+        // already have it
+        if(lastIncludedIndex > index) return true;
+        // now lets say leader has sent index 80 and term 5 and we have index 80 but term 3, so its important to check term , if we directly
+        // return true then we will be appending these entries which are wrong , we have to check term if they do not match then we have to ask
+        // leader for appropriate entries.
+        else if(lastIncludedIndex == index) return lastIncludedTerm == term;
         return index <= lastIndex() && termAt(index) == term;
     }
 
@@ -63,15 +74,24 @@ public class RaftLog {
     }
 
     public LogEntry get(int index){
-        return logEntries.get(index);
+        // lastincludedindex is offset, because we may have removed these many entries from our log during snapshotting and compaction
+        return logEntries.get(index - lastIncludedIndex);
     }
 
     public int termAt(int index){
-        return logEntries.get(index).getTerm();
+        return logEntries.get(index - lastIncludedIndex).getTerm();
     }
 
     public int size(){
         return logEntries.size();
+    }
+
+    public void setLastIncludedIndex(int index){
+        this.lastIncludedIndex = index;
+    }
+
+    public void setLastIncludedTerm(int term){
+        this.lastIncludedTerm = term;
     }
 
 }

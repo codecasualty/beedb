@@ -70,7 +70,16 @@ public class RaftNode{
     // transport layer to send requests to peers
     private RaftTransport transport;
 
+    // raft snapshotmanager for serializing & deserializing data
+    RaftSnapshotManager raftSnapshotManager;
     private Logger LOGGER = LoggerFactory.getLogger(RaftNode.class.getName());
+
+    // raft snapshot progress variable
+    // its marked as volatile because its changed by threads while other threads might read
+    // the value from memory and its values may be changed in threads cache/register and may not be reflected in memory
+    // easiest way to get happens-before relationship
+    private volatile boolean inProgress;
+    private final    int     snapShotThreshold = 1000;
 
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport) {
         this.peerAddresses = peerAddresses;
@@ -86,6 +95,14 @@ public class RaftNode{
         this.transport = transport;
         MDC.put("nodeId", nodeId);
         this.applyExecutor.submit(wrapRunnableWithMdc(this::applyCommitedEntries));
+        this.raftSnapshotManager = new RaftSnapshotManager();
+        RaftSnapshot raftSnapShot = raftSnapshotManager.deserialize(nodeId);
+        if(raftSnapShot != null){
+            lastApplied = commitIndex = raftSnapShot.getLastAppliedIndex();
+            currentTerm = raftSnapShot.getLastAppliedTerm();
+            this.cache.restoreState(raftSnapShot.getCacheState());
+        }
+        inProgress = false;
     }
     
     public synchronized void start(){
@@ -552,6 +569,20 @@ public class RaftNode{
                     }
                 }
                 lastApplied++;
+                if(lastApplied > snapShotThreshold && !inProgress){
+                    // as our above condition says that we have > snapShotThreshold entris 
+                    // so we take that state and make sure even in background values of lastapplied , current term or cache state changes
+                    // it shouldn't affect our snapshot.
+                    inProgress = true;
+                    final int snapShotApplied = lastApplied;
+                    final int snapShotTerm = currentTerm;
+                    final Map<String, CacheItem> cacheState = cache.getState();
+                    Thread.ofVirtual().start(() -> {
+                        raftSnapshotManager.serialize(cacheState, snapShotApplied, snapShotTerm , nodeId);
+                        inProgress = false;
+                    });
+
+                }
                 LogEntry entry = log.get(lastApplied);
                 Response response = null;
                 LOGGER.info("term {} node id {} applying entry {} at index {} ", currentTerm, nodeId, entry, lastApplied);

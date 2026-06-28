@@ -2,6 +2,9 @@ package com.memcache.cache;
 
 import java.nio.charset.StandardCharsets;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class CacheItem {
     private String      key;
     private byte[]      value;
@@ -15,6 +18,21 @@ public class CacheItem {
         this.flags              = flags;
         this.expiresAt          = (expiry == 0) ? -1 : System.currentTimeMillis() + (expiry * 1000L);
         this.infiniteExpiry     = (expiry == 0);
+    }
+
+    @JsonCreator
+    public CacheItem(
+        @JsonProperty("key") String key, 
+        @JsonProperty("value") byte[] value, 
+        @JsonProperty("flags") int flags,
+        @JsonProperty("expiresAt") long expiresAt,
+        @JsonProperty("infiniteExpiry") boolean infiniteExpiry
+    ){
+        this.key = key;
+        this.value = value;
+        this.flags = flags;
+        this.expiresAt = expiresAt;
+        this.infiniteExpiry = infiniteExpiry;
     }
 
     public String getKey() {
