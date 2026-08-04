@@ -575,12 +575,22 @@ public class RaftNode{
                     // it shouldn't affect our snapshot.
                     inProgress = true;
                     final int snapShotApplied = lastApplied;
-                    final int snapShotTerm = currentTerm;
+                    final int snapShotTerm = log.termAt(snapShotApplied);
                     final Map<String, CacheItem> cacheState = cache.getState();
                     Thread.ofVirtual().start(() -> {
-                        raftSnapshotManager.serialize(cacheState, snapShotApplied, snapShotTerm , nodeId);
+                        boolean snapshotStatus = raftSnapshotManager.serialize(cacheState, snapShotApplied, snapShotTerm , nodeId);
+                        // need to lock on this object because we are using virtual threads
+                        // without locking we might change the state while some thread is reading it
+                        synchronized(this){
+                            if(snapshotStatus == true){
+                                log.compactTill(snapShotApplied);
+                                log.setLastIncludedIndex(snapShotApplied);
+                                log.setLastIncludedTerm(snapShotTerm);
+                            }
+                        }
                         inProgress = false;
                     });
+                    
 
                 }
                 LogEntry entry = log.get(lastApplied);

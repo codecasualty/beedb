@@ -94,4 +94,8 @@ public class RaftLog {
         this.lastIncludedTerm = term;
     }
 
+    public void compactTill(int index){
+        logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex , logEntries.size()));
+    }
+
 }
