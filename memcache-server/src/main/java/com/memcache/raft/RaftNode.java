@@ -94,14 +94,16 @@ public class RaftNode{
         this.pendingRequests = new ConcurrentHashMap<>();
         this.transport = transport;
         MDC.put("nodeId", nodeId);
-        this.applyExecutor.submit(wrapRunnableWithMdc(this::applyCommitedEntries));
         this.raftSnapshotManager = new RaftSnapshotManager();
         RaftSnapshot raftSnapShot = raftSnapshotManager.deserialize(nodeId);
         if(raftSnapShot != null){
             lastApplied = commitIndex = raftSnapShot.getLastAppliedIndex();
-            currentTerm = raftSnapShot.getLastAppliedTerm();
+            int lastIncludedTerm = raftSnapShot.getLastAppliedTerm();
+            log.setLastIncludedIndex(lastApplied);
+            log.setLastIncludedTerm(lastIncludedTerm);
             this.cache.restoreState(raftSnapShot.getCacheState());
         }
+        this.applyExecutor.submit(wrapRunnableWithMdc(this::applyCommitedEntries));
         inProgress = false;
     }
     
