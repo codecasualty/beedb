@@ -79,7 +79,7 @@ public class RaftNode{
     // the value from memory and its values may be changed in threads cache/register and may not be reflected in memory
     // easiest way to get happens-before relationship
     private volatile boolean inProgress;
-    private final    int     snapShotThreshold = 1000;
+    private          int     snapShotThreshold = 1000;
 
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport) {
         this.peerAddresses = peerAddresses;
@@ -588,6 +588,11 @@ public class RaftNode{
                                 log.compactTill(snapShotApplied);
                                 log.setLastIncludedIndex(snapShotApplied);
                                 log.setLastIncludedTerm(snapShotTerm);
+                                // after lastapplied > snapshot threshold, each lastapplied + x will trigger snapshot
+                                // to avoid that we keep on increasing snapsthot threshold. that way 
+                                // lastapplied +x wont trigger snapshot until its greater than > lastapplied + 1000
+                                // basically x > 1000
+                                snapShotThreshold = snapShotApplied + 1000;
                             }
                         }
                         inProgress = false;
