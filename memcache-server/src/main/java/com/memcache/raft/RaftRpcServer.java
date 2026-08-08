@@ -64,7 +64,9 @@ public class RaftRpcServer {
                     Thread.ofVirtual().start(() -> {
                         try {
                         handleConnection(socket);
+                        LOGGER.info("current node/127.0.0.1 connection will be closed");
                         socket.close();
+                        LOGGER.info("current node/127.0.0.1 connection closed");
                         } catch (Exception e) {
                             e.printStackTrace();
                         }

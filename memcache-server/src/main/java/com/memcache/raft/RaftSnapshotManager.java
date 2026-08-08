@@ -65,7 +65,8 @@ public class RaftSnapshotManager {
             BufferedWriter bw = new BufferedWriter(osw);
         ){
             
-            objectMapper.writeValue(bw, snapshot);
+            String json = objectMapper.writeValueAsString(snapshot);
+            bw.write(json);
             bw.flush();
             fos.getFD().sync();
 

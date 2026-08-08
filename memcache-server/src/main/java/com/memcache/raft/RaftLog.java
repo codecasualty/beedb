@@ -20,12 +20,13 @@ public class RaftLog {
     public RaftLog(){
         logEntries = new ArrayList<LogEntry>();
         // adding a sentenel entry to log
-        // with lastincludedindex and lastincluded term, because if this node ever became leader it will send term 
-        // as 0 , because after restart logentries is initialised with sentinel log and with snapshot restored
-        // it would break system
-        logEntries.add(new LogEntry(lastIncludedIndex, null, lastIncludedTerm, true));
+        logEntries.add(new LogEntry(0, null, 0, true));
     }
 
+    public RaftLog(int lastIncludedIndex , int lastIncludedTerm){
+        logEntries = new ArrayList<LogEntry>();
+        logEntries.add(new LogEntry(lastIncludedIndex, null, lastIncludedTerm, true));
+    }
     public int lastIndex(){
         return logEntries.get(logEntries.size() - 1).getIndex();
     }

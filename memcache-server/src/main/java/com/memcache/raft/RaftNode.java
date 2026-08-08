@@ -72,6 +72,7 @@ public class RaftNode{
 
     // raft snapshotmanager for serializing & deserializing data
     RaftSnapshotManager raftSnapshotManager;
+    RaftStateManager    raftStateManager;
     private Logger LOGGER = LoggerFactory.getLogger(RaftNode.class.getName());
 
     // raft snapshot progress variable
@@ -95,13 +96,20 @@ public class RaftNode{
         this.transport = transport;
         MDC.put("nodeId", nodeId);
         this.raftSnapshotManager = new RaftSnapshotManager();
+        this.raftStateManager   =  new RaftStateManager();
         RaftSnapshot raftSnapShot = raftSnapshotManager.deserialize(nodeId);
+        RaftState    raftState    = raftStateManager.deserialize(nodeId);
         if(raftSnapShot != null){
             lastApplied = commitIndex = raftSnapShot.getLastAppliedIndex();
             int lastIncludedTerm = raftSnapShot.getLastAppliedTerm();
+            this.log = new RaftLog(lastApplied, lastIncludedTerm);
             log.setLastIncludedIndex(lastApplied);
             log.setLastIncludedTerm(lastIncludedTerm);
             this.cache.restoreState(raftSnapShot.getCacheState());
+        }
+        if(raftState != null){
+            this.currentTerm = raftState.getTerm();
+            this.votedFor = raftState.getVotedFor();
         }
         this.applyExecutor.submit(wrapRunnableWithMdc(this::applyCommitedEntries));
         inProgress = false;
@@ -429,7 +437,7 @@ public class RaftNode{
         // becaues it can happen that in cluster of 5 nodes , due to partition a group of nodes can keep on particicpating in election becaues they are not able to reach
         // to majority thus just having more/larger term does not gurantee that the node is supposed to be leader, but it does mean that the current node was not part of all those
         // terms and there fore its better to step down and let all nodes agree on this current term and then continue the leader election process.
-        MDC.put("nodeId", nodeId);
+        // MDC.put("nodeId", nodeId);
         LOGGER.info("term {} node id {} handling request vote {} ", currentTerm, nodeId, requestVoteRequest);
         RequestVoteResponse response = buildRequestVoteResponse(false);
         // we have gone through more election terms so we are more updated than the node who is asking for vote thus its best not to grant it vote
@@ -447,7 +455,12 @@ public class RaftNode{
             if(votedFor == null || votedFor.equals(requestVoteRequest.getCandidateId())){
                 votedFor = requestVoteRequest.getCandidateId();
                 resetElectionTimer();
-                response.setVoteGranted(true);
+                LOGGER.info("going to call raftstatemanager for serializations {} {} {} ", currentTerm, votedFor, nodeId);
+                boolean grantVote = raftStateManager.serialize(currentTerm, votedFor, nodeId);
+                if(grantVote)
+                    response.setVoteGranted(true);
+                else
+                    response.setVoteGranted(false);
                 LOGGER.info("term {} node id {} vote granted for term {} ", currentTerm, nodeId, requestVoteRequest.getTerm());
                 return response;
             }
