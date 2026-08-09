@@ -6,8 +6,10 @@ import com.memcache.command.Command;
 import com.memcache.command.CommandType;
 
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +19,10 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assert.assertNotEquals;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -33,14 +38,22 @@ public class RaftClusterTest {
     private List<RaftNode> raftNodesList;
     private Map<RaftNode, String> raftNodeAddress = new LinkedHashMap<>();
     private Logger LOGGER  = LoggerFactory.getLogger(RaftClusterTest.class.getName());
-
+    private String stateDir = null;
+    private String snapshotDir = null;
+    private String tmpDir = null;
+    @Rule
+    public TemporaryFolder folder = new TemporaryFolder();
     @Before
-    public void setUp() throws InterruptedException{
+    public void setUp() throws InterruptedException, IOException{
         raftNodesList = new ArrayList<>();
         raftTransport = new InMemoryRaftTransport();
-        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport);
-        RaftNode raftNode2 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport);
-        RaftNode raftNode3 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport);
+        stateDir = folder.newFolder("state").getAbsolutePath();
+        snapshotDir = folder.newFolder("snapshots").getAbsolutePath();
+        tmpDir = folder.newFolder("tmp").getAbsolutePath();
+        folder.newFolder("logs").getAbsoluteFile();
+        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir);
+        RaftNode raftNode2 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir);
+        RaftNode raftNode3 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir);
         raftNodeAddress.put(raftNode1, "localhost:11211");
         raftNodeAddress.put(raftNode2, "localhost:11212");
         raftNodeAddress.put(raftNode3, "localhost:11213");
@@ -157,7 +170,7 @@ public class RaftClusterTest {
         
                     assertTrue(e.getCause() instanceof IllegalStateException);
                     assertTrue(future.isCompletedExceptionally());
-                    assertEquals("Not leader: "+leaderNode.getNodeId(), e.getCause().getMessage());
+                    assertEquals("Not Leader: "+leaderNode.getNodeId(), e.getCause().getMessage());
         
                 }
             }

@@ -26,10 +26,17 @@ public class RaftStateManager {
 
     private final Logger       LOGGER       = LoggerFactory.getLogger(RaftStateManager.class.getName());
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private       String       STATE_DIR    = "state";
+    private       String       TMP_DIR      = "tmp";
+
+    public RaftStateManager(String stateDir, String tmpDir){
+        this.STATE_DIR = stateDir;
+        this.TMP_DIR = tmpDir;
+    }
 
     public boolean serialize(int currentTerm , String votedFor, String nodeId){
-        String tempFolderPath = "tmp/"+nodeId;
-        String destFolderPath = "state/"+nodeId;
+        String tempFolderPath = TMP_DIR+"/"+nodeId;
+        String destFolderPath = STATE_DIR+"/"+nodeId;
         String tempFilePath = tempFolderPath+"/state.tmp";
         String destFilePath = destFolderPath+"/state.snap";
 
@@ -45,6 +52,10 @@ public class RaftStateManager {
             OutputStreamWriter osw = new OutputStreamWriter(fos,  StandardCharsets.UTF_8);
             BufferedWriter bw = new BufferedWriter(osw);
         ){
+            /*
+            we haven't use object mapeper.writevalue() because it creates a jsongenerator wrapping bw , writes the values and then closes the generator
+            and by default jsongenerator.feature.auto close target is true, which means closing the generator will close the target
+            */
             String json = objectMapper.writeValueAsString(raftState);
             bw.write(json);
             bw.flush();

@@ -5,3 +5,10 @@ target/
 .settings/
 .idea/
 .vscode/
+
+state/
+snapshots/
+tmp/
+logs/
+logs.txt
+node*.txt

@@ -17,6 +17,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import com.memcache.cache.Cache;
 import com.memcache.command.Command;
@@ -40,6 +41,7 @@ import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.Arrays;
 import java.util.ArrayList;
 public class Server {
@@ -68,8 +70,11 @@ public class Server {
             String nodeId = properties.getProperty("nodeId");
             int clientPort = Integer.parseInt(properties.getProperty("clientPort"));
             int raftPort = Integer.parseInt(properties.getProperty("raftPort"));
+            String stateDir = properties.getProperty("stateDir");
+            String snapshotDir = properties.getProperty("snapshotDir");
+            String tmpDir = properties.getProperty("tmpDir");
             Server server = new Server();
-            server.start(peers, nodeId , clientPort , raftPort);
+            server.start(peers, nodeId , clientPort , raftPort, stateDir, snapshotDir, tmpDir);
 
         }catch(Exception e){
             e.printStackTrace();
@@ -77,13 +82,13 @@ public class Server {
         
     }
     
-    public void start(ArrayList<String> peers, String nodeId, int clientPort,int raftPort) throws IOException{
+    public void start(ArrayList<String> peers, String nodeId, int clientPort,int raftPort, String stateDir, String snapshotDir, String tmpDir) throws IOException{
         // selector to notify about new connections
         if(peers.size() == 0) throw new IllegalArgumentException("No peers provided");
         if(nodeId == null) throw new IllegalArgumentException("No nodeId provided");
         cache = new Cache();
         raftTransport = new SocketRaftTransport();
-        raftNode = new RaftNode(peers, nodeId, cache , raftTransport);
+        raftNode = new RaftNode(peers, nodeId, cache , raftTransport, stateDir, snapshotDir, tmpDir);
         raftRpcServer = new RaftRpcServer(raftPort, raftNode);
         raftNode.start();
         raftRpcServer.start();
@@ -228,7 +233,14 @@ public class Server {
         } catch (Exception e) {
             // TODO: handle exception
             e.printStackTrace();
-            return "ERROR\r\n".getBytes();
+            if(e instanceof ExecutionException && e.getCause() instanceof IllegalStateException){
+                String message  = "SERVER_ERROR " + ((IllegalStateException) e.getCause()).getMessage()+"\r\n";
+                return message.getBytes();
+            }
+            else if(e instanceof TimeoutException){
+                return "SERVER_ERROR timeout\r\n".getBytes();
+            }
+            return "SERVER_ERROR\r\n".getBytes();
             
         }
     }

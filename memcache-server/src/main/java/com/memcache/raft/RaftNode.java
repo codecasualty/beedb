@@ -82,7 +82,9 @@ public class RaftNode{
     private volatile boolean inProgress;
     private          int     snapShotThreshold = 1000;
 
-    public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport) {
+    public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport,
+                    String stateDir, String snapshotDir, String tmpDir
+    ) {
         this.peerAddresses = peerAddresses;
         this.nodeId = nodeId;
         this.cache = cache;
@@ -95,8 +97,8 @@ public class RaftNode{
         this.pendingRequests = new ConcurrentHashMap<>();
         this.transport = transport;
         MDC.put("nodeId", nodeId);
-        this.raftSnapshotManager = new RaftSnapshotManager();
-        this.raftStateManager   =  new RaftStateManager();
+        this.raftSnapshotManager = new RaftSnapshotManager(snapshotDir, tmpDir);
+        this.raftStateManager   =  new RaftStateManager(stateDir, tmpDir);
         RaftSnapshot raftSnapShot = raftSnapshotManager.deserialize(nodeId);
         RaftState    raftState    = raftStateManager.deserialize(nodeId);
         if(raftSnapShot != null){
@@ -157,10 +159,20 @@ public class RaftNode{
     private synchronized boolean isCandidate(){
         return role == NodeRole.CANDIDATE;
     }
+
+    private void persistOrDie(){
+        boolean ok = raftStateManager.serialize(currentTerm, votedFor, nodeId);
+        if(!ok){
+            LOGGER.error("FATAL: cannot persis raft state (term = {} votedFor = {} nodeId = {} ", currentTerm , votedFor, nodeId);
+            System.exit(1);
+        }
+
+    }
     private synchronized void transitionToCandidate(){
         role = NodeRole.CANDIDATE;
         currentTerm++;
         votedFor = nodeId;
+        persistOrDie();
     }
 
     // removing synchronized keyword because we dont want to block the main thread
@@ -218,6 +230,7 @@ public class RaftNode{
         LOGGER.info("term {} node id {} stepping down due to higher term {} ", currentTerm, nodeId, term);
         currentTerm = term;
         votedFor = null;
+        persistOrDie();
         transitionToFollower();
         resetElectionTimer();
         // cancelHeartbeatTimer();
@@ -437,7 +450,7 @@ public class RaftNode{
         // becaues it can happen that in cluster of 5 nodes , due to partition a group of nodes can keep on particicpating in election becaues they are not able to reach
         // to majority thus just having more/larger term does not gurantee that the node is supposed to be leader, but it does mean that the current node was not part of all those
         // terms and there fore its better to step down and let all nodes agree on this current term and then continue the leader election process.
-        // MDC.put("nodeId", nodeId);
+        MDC.put("nodeId", nodeId);
         LOGGER.info("term {} node id {} handling request vote {} ", currentTerm, nodeId, requestVoteRequest);
         RequestVoteResponse response = buildRequestVoteResponse(false);
         // we have gone through more election terms so we are more updated than the node who is asking for vote thus its best not to grant it vote
@@ -560,8 +573,8 @@ public class RaftNode{
         CompletableFuture<String> future = new CompletableFuture<>();
         synchronized(this){
             if(!isLeader()){
-                String message = leaderId == null ? "Election in progress" : "Not Leader: ";
-                future.completeExceptionally(new IllegalStateException(message + leaderId));
+                String message = leaderId == null ? "Election in progress " : "Not Leader: "+leaderId;
+                future.completeExceptionally(new IllegalStateException(message));
                 return future;
             }
             int index = log.lastIndex() + 1;

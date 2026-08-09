@@ -64,9 +64,9 @@ public class RaftRpcServer {
                     Thread.ofVirtual().start(() -> {
                         try {
                         handleConnection(socket);
-                        LOGGER.info("current node/127.0.0.1 connection will be closed");
+                        LOGGER.info("connection will be closed from source node {}", socket.getInetAddress());
                         socket.close();
-                        LOGGER.info("current node/127.0.0.1 connection closed");
+                        LOGGER.info("connection closed from source node {}", socket.getInetAddress());
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
@@ -100,10 +100,10 @@ public class RaftRpcServer {
         // read one line from socket
         BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         String request = bufferedReader.readLine();
-        LOGGER.info("current node" + socket.getInetAddress() + " request from other node : {}", request);
+        LOGGER.info("received request from source node {} : {}", socket.getInetAddress(), request);
         JsonNode root = objectMapper.readTree(request);
         String rpcType = root.get("rpcType").asText();
-        LOGGER.info("current node" + socket.getInetAddress() + " rpc type : {}", rpcType);
+        LOGGER.info("received rpc type from source node {} : {}", socket.getInetAddress(), rpcType);
         // we have to get payload from map
         JsonNode payload = root.get("payload");
         if(rpcType.equals("REQUEST_VOTE")){
@@ -117,7 +117,7 @@ public class RaftRpcServer {
             // once response is available we will have to convert it to json 
             // and send it back to other node
             String responseString = objectMapper.writeValueAsString(response);
-            LOGGER.info("current node" + socket.getInetAddress() + " response from raft node {} : {}", socket, responseString);
+            LOGGER.info("sending response to peer node {} : {}", socket.getInetAddress(), responseString);
             sendResponse(socket, responseString);
         }else if (rpcType.equals("APPEND_ENTRIES")){
             // we have to read request from socket
@@ -127,7 +127,7 @@ public class RaftRpcServer {
             // once response is available we will have to convert it to json 
             // and send it back to other node
             String responseString = objectMapper.writeValueAsString(response);
-            LOGGER.info("current node" + socket.getInetAddress() + " response from raft node {} : {}", socket, responseString);
+            LOGGER.info("sending response to peer node {} : {}", socket.getInetAddress(), responseString);
             sendResponse(socket, responseString);
         }
         

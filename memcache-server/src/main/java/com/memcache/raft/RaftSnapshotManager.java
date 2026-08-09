@@ -46,10 +46,17 @@ public class RaftSnapshotManager {
 
     private final Logger       LOGGER       = LoggerFactory.getLogger(RaftSnapshotManager.class.getName());
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private       String       SNAPSHOT_DIR = "snapshots";
+    private       String       TMP_DIR      = "tmp";
+
+    public RaftSnapshotManager(String snapshotDir, String tmpDir){
+        this.SNAPSHOT_DIR = snapshotDir;
+        this.TMP_DIR = tmpDir;
+    }
 
     public boolean serialize(Map<String,CacheItem> cacheState, int lastIncludedIndex, int lastIncludedTerm, String nodeId){
-        String tempFolderPath = "tmp/"+nodeId;
-        String destFolderPath = "snapshots/"+nodeId;
+        String tempFolderPath = TMP_DIR+"/"+nodeId;
+        String destFolderPath = SNAPSHOT_DIR+"/"+nodeId;
         String tempFilePath = tempFolderPath+"/snapshot.tmp";
         String destFilepath = destFolderPath+"/snapshot.snap";
         boolean isTempDirectoryExist = createDirectoryWithPermissions(tempFolderPath);
