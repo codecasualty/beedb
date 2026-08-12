@@ -32,5 +32,13 @@ public class WalRecord {
     public int getFromIndex(){
         return fromIndex;
     }
+
+    public String toString(){
+        return "WalRecord{" +
+                "entryType=" + entryType +
+                ", logEntry=" + logEntry +
+                ", fromIndex=" + fromIndex +
+                '}';
+    }
     
 }

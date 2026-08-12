@@ -1,9 +1,5 @@
 package com.memcache.raft.wal;
 import com.memcache.raft.LogEntry;
-import com.memcache.raft.wal.PendingWrite;
-import com.memcache.raft.wal.WalRecord;
-import com.memcache.raft.wal.WalService;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -33,20 +29,19 @@ public class WalService {
     private              FileChannel walFileChannel;
     private              ExecutorService executorService;
     private final        ObjectMapper objectMapper;
-    private final        CRC32 crc32;
     private volatile     long goodSegmentEnd;
     private final        int JSON_LENGTH = 8;
     private final        int CRC_LENGTH = 10;
     private final        Logger LOGGER = LoggerFactory.getLogger(WalService.class.getName());
 
     public WalService(String walPath) throws IOException{
+
         this.walFilePath = walPath;
         Path path = Paths.get(walFilePath);
         this.walQueue = new LinkedBlockingQueue<>();
         this.walFileChannel = FileChannel.open(path,StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
         this.executorService = Executors.newSingleThreadExecutor();
         this.objectMapper = new ObjectMapper();
-        crc32 = new CRC32();
         goodSegmentEnd = -1;
         this.executorService.submit(() -> start());
         LOGGER.info("wal file path is {}", walFilePath);
@@ -84,6 +79,7 @@ public class WalService {
     }
     
     public void writeToFile() throws Exception{
+        CRC32 crc32 = new CRC32();
         List<PendingWrite> records = new ArrayList<>();
         PendingWrite pendingWrite = walQueue.take();
         records.add(pendingWrite);
@@ -99,6 +95,7 @@ public class WalService {
             long checksum = crc32.getValue();
             String emit = String.format("%08d %010d ", bytes.length, checksum) + json + "\n";
             walFileChannel.write(ByteBuffer.wrap(emit.getBytes(StandardCharsets.UTF_8)));
+            LOGGER.info("wal record is {} written to file", walRecord);
             
         }
         // fsync
@@ -119,8 +116,17 @@ public class WalService {
         // TODO: if they match then apply that entry on our raftlog , 
         // TODO: finally return our new raftlog
         List<LogEntry> raftlog = new ArrayList<>();
+        CRC32 crc32 = new CRC32();
+
         try{
+            walFileChannel.position(0);
+            LOGGER.info("from index is {} ", index);
+            LOGGER.info("position is {} ", walFileChannel.position());
+            LOGGER.info("size of file is {} ", walFileChannel.size());
+            LOGGER.info("good segment end is {} ", goodSegmentEnd);
             while(walFileChannel.position() < walFileChannel.size()){
+                long recordStart = walFileChannel.position();
+                // LOGGER.info(" in while loop position is {} ", walFileChannel.position());
                 ByteBuffer buffer = ByteBuffer.allocate(JSON_LENGTH + 1 + CRC_LENGTH + 1);
                 while(buffer.hasRemaining()){
                     int val = walFileChannel.read(buffer);
@@ -128,12 +134,19 @@ public class WalService {
                         break;
                     }
                 }
+                if(buffer.hasRemaining()){
+                    truncate(recordStart);
+                    break;
+                }
                 // for reading flipped
                 buffer.flip();
+                printBuffer(buffer.duplicate());
                 ByteBuffer lengthBuffer = ByteBuffer.allocate(8);
                 while(lengthBuffer.hasRemaining()){
                     lengthBuffer.put(buffer.get());
                 }
+                lengthBuffer.flip();
+                // printBuffer(lengthBuffer.duplicate());
                 buffer.get();
 
                 // figuring out CRC 
@@ -141,51 +154,100 @@ public class WalService {
                 while(crcBuffer.hasRemaining()){
                     crcBuffer.put(buffer.get());
                 }
-                String crc = new String(crcBuffer.array());
-                crc32.reset();
-                crc32.update(crcBuffer.array());
+                String crc = new String(crcBuffer.array(), StandardCharsets.UTF_8);
+                // LOGGER.info("crc stored in wal entry is  {} ", crc);
                 buffer.get();
-
+                
                 // read json body
-                ByteBuffer jsonBody = ByteBuffer.allocate(Integer.parseInt(lengthBuffer.array().toString()));
+                // LOGGER.info("length of json body is {} ", Integer.parseInt(new String(lengthBuffer.array() , StandardCharsets.UTF_8)));
+                int lengthJson = Integer.parseInt(new String(lengthBuffer.array() , StandardCharsets.UTF_8));
+                ByteBuffer jsonBody = ByteBuffer.allocate(lengthJson);
                 while(jsonBody.hasRemaining()){
-                    walFileChannel.read(jsonBody);
+                    int read = walFileChannel.read(jsonBody);
+                    if(read == -1){
+                        break;
+                    }
                 }
-                
-                
+
+                if(jsonBody.hasRemaining()){
+                    truncate(recordStart);
+                    break;
+                }
                 // read json string and convert it to WalRecord
                 String jsonString = new String(jsonBody.array(), StandardCharsets.UTF_8);
+                // parse and verify json string, this is necessary because while writing someone might have corrupted the json string
+                // and we only support utf-8 encoding
+                byte[] utf8Bytes = jsonString.getBytes(StandardCharsets.UTF_8);
+                String reEncodedJsonString = new String(utf8Bytes, StandardCharsets.UTF_8);
+                if(!jsonString.equals(reEncodedJsonString)){
+                    truncate(recordStart);
+                    break;
+                }
                 WalRecord walRecord = objectMapper.readValue(jsonString, WalRecord.class);
-                if(crc32.getValue() == (Long.parseLong(crc.trim()))){
+                // computing crc value for wal record
+                byte[] bytes = jsonString.getBytes(StandardCharsets.UTF_8);
+                crc32.reset();
+                crc32.update(bytes);
+                long checksum = crc32.getValue();
+
+                // LOGGER.info("wal record is {} read from file", walRecord);
+                // LOGGER.info("new computed crc is {} ", checksum);
+                // LOGGER.info("stored crc is {} ", (Long.parseLong(crc.trim())));
+                // LOGGER.info("entry type is {} ", walRecord.entryType);
+                if(checksum == (Long.parseLong(crc.trim()))){
                     EntryType entryType = walRecord.entryType;
                     LogEntry logEntry = walRecord.logEntry;
                     int fromIndex = walRecord.fromIndex;
-                    if(fromIndex >= index){
-                        if (entryType == EntryType.TRUNCATE) {
-                            raftlog.subList(fromIndex, raftlog.size()).clear();
-                            
-                        } else if (logEntry != null) {
-                            raftlog.add(logEntry);
-                            
-                        }
+                    // LOGGER.info("log entry index index is {} and index from where we are reading is {} ", (logEntry != null ? logEntry.getIndex() : -1), index);
+                    if(entryType == EntryType.TRUNCATE && fromIndex > index) {                        
+                        raftlog.removeIf(e -> e.getIndex() >= fromIndex);
+                        
+                    } else if (logEntry != null && logEntry.getIndex() > index) {
+                        raftlog.add(logEntry);                            
                     }
+                    
+                    // print(raftlog);
                 }else{
-                    goodSegmentEnd = walFileChannel.position() - JSON_LENGTH - 1 - CRC_LENGTH - 1;
+                    goodSegmentEnd = recordStart ;
+                    truncate(goodSegmentEnd);
                     break;
                 }
                 // for \n after json body we have to read one more byte
                 walFileChannel.position(walFileChannel.position() + 1);
-            }
-            if(goodSegmentEnd == -1) goodSegmentEnd = walFileChannel.position();
-            else{
-                walFileChannel.truncate(goodSegmentEnd);
-                walFileChannel.position(goodSegmentEnd);
+                // LOGGER.info("-----------------********-----------------------\n");
             }
         }catch(Exception e){
             e.printStackTrace();
         }
+        goodSegmentEnd = -1;
         return raftlog;
         
     }
 
+    public void truncate(long index){
+        try{
+            walFileChannel.truncate(index);
+            walFileChannel.position(index);
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+    }
+
+    public void print(List<LogEntry> raftlog){
+        LOGGER.info("--------------------------------------printing log entries ----------------------------------\n");
+        for(LogEntry logEntry : raftlog){
+            LOGGER.info("log entry is {}", logEntry);
+        }
+        LOGGER.info("size of raftlog is {}", raftlog.size());
+        LOGGER.info("----------------------------------------\n");
+    }
+
+    public void printBuffer(ByteBuffer buffer){
+        LOGGER.info("printing buffer ----------------------------------\n");
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        String str = new String(bytes, StandardCharsets.UTF_8);
+        LOGGER.info("buffer is {} ", str);
+        LOGGER.info("----------------------------------------\n");
+    }
 }
