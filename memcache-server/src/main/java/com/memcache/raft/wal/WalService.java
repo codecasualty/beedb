@@ -117,6 +117,7 @@ public class WalService {
         // TODO: finally return our new raftlog
         List<LogEntry> raftlog = new ArrayList<>();
         CRC32 crc32 = new CRC32();
+        long recordStart = 0;
 
         try{
             walFileChannel.position(0);
@@ -125,7 +126,7 @@ public class WalService {
             LOGGER.info("size of file is {} ", walFileChannel.size());
             LOGGER.info("good segment end is {} ", goodSegmentEnd);
             while(walFileChannel.position() < walFileChannel.size()){
-                long recordStart = walFileChannel.position();
+                recordStart = walFileChannel.position();
                 // LOGGER.info(" in while loop position is {} ", walFileChannel.position());
                 ByteBuffer buffer = ByteBuffer.allocate(JSON_LENGTH + 1 + CRC_LENGTH + 1);
                 while(buffer.hasRemaining()){
@@ -140,7 +141,7 @@ public class WalService {
                 }
                 // for reading flipped
                 buffer.flip();
-                printBuffer(buffer.duplicate());
+                // printBuffer(buffer.duplicate());
                 ByteBuffer lengthBuffer = ByteBuffer.allocate(8);
                 while(lengthBuffer.hasRemaining()){
                     lengthBuffer.put(buffer.get());
@@ -160,7 +161,14 @@ public class WalService {
                 
                 // read json body
                 // LOGGER.info("length of json body is {} ", Integer.parseInt(new String(lengthBuffer.array() , StandardCharsets.UTF_8)));
-                int lengthJson = Integer.parseInt(new String(lengthBuffer.array() , StandardCharsets.UTF_8));
+                String lengthString = new String(lengthBuffer.array() , StandardCharsets.UTF_8);
+                lengthString = lengthString.trim();
+                long remaining = walFileChannel.size() - walFileChannel.position();
+                if(!lengthString.matches("\\d+")  || remaining < lengthString.length()){
+                    truncate(recordStart);
+                    break;
+                }
+                int lengthJson = Integer.parseInt(lengthString);
                 ByteBuffer jsonBody = ByteBuffer.allocate(lengthJson);
                 while(jsonBody.hasRemaining()){
                     int read = walFileChannel.read(jsonBody);
@@ -180,6 +188,7 @@ public class WalService {
                 byte[] utf8Bytes = jsonString.getBytes(StandardCharsets.UTF_8);
                 String reEncodedJsonString = new String(utf8Bytes, StandardCharsets.UTF_8);
                 if(!jsonString.equals(reEncodedJsonString)){
+                    LOGGER.error("corrupted json string {} ", jsonString);
                     truncate(recordStart);
                     break;
                 }
@@ -206,18 +215,23 @@ public class WalService {
                         raftlog.add(logEntry);                            
                     }
                     
-                    // print(raftlog);
+                    print(raftlog);
                 }else{
                     goodSegmentEnd = recordStart ;
                     truncate(goodSegmentEnd);
                     break;
                 }
-                // for \n after json body we have to read one more byte
-                walFileChannel.position(walFileChannel.position() + 1);
                 // LOGGER.info("-----------------********-----------------------\n");
+                // for \n after json body we have to read one more byte
+                // the reason for this is that we are reading the json body and we have to read the \n after json body
+                // and if we don't read \n then we will be reading the next record
+                // also we are doing this after completoin of complete logic because at this point of time, we are sure that 
+                // our wal is valid
+                walFileChannel.position(walFileChannel.position() + 1);
             }
         }catch(Exception e){
             e.printStackTrace();
+            truncate(recordStart);
         }
         goodSegmentEnd = -1;
         return raftlog;
@@ -249,5 +263,9 @@ public class WalService {
         String str = new String(bytes, StandardCharsets.UTF_8);
         LOGGER.info("buffer is {} ", str);
         LOGGER.info("----------------------------------------\n");
+    }
+
+    public long getPosition() throws IOException{
+        return walFileChannel.position();
     }
 }
