@@ -10,6 +10,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.ArrayList;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -23,6 +25,9 @@ import com.memcache.raft.rpc.AppendEntriesRequest;
 import com.memcache.raft.rpc.AppendEntriesResponse;
 import com.memcache.raft.rpc.RequestVoteRequest;
 import com.memcache.raft.rpc.RequestVoteResponse;
+import com.memcache.raft.wal.EntryType;
+import com.memcache.raft.wal.WalRecord;
+import com.memcache.raft.wal.WalService;
 import com.memcache.handler.CommandProcessor;
 import com.memcache.response.Response;
 import org.slf4j.Logger;
@@ -73,6 +78,7 @@ public class RaftNode{
     // raft snapshotmanager for serializing & deserializing data
     RaftSnapshotManager raftSnapshotManager;
     RaftStateManager    raftStateManager;
+    WalService          walService;
     private Logger LOGGER = LoggerFactory.getLogger(RaftNode.class.getName());
 
     // raft snapshot progress variable
@@ -83,7 +89,7 @@ public class RaftNode{
     private          int     snapShotThreshold = 1000;
 
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport,
-                    String stateDir, String snapshotDir, String tmpDir
+                    String stateDir, String snapshotDir, String tmpDir, String walDir
     ) {
         this.peerAddresses = peerAddresses;
         this.nodeId = nodeId;
@@ -101,6 +107,12 @@ public class RaftNode{
         this.raftStateManager   =  new RaftStateManager(stateDir, tmpDir);
         RaftSnapshot raftSnapShot = raftSnapshotManager.deserialize(nodeId);
         RaftState    raftState    = raftStateManager.deserialize(nodeId);
+        try{
+            this.walService           = new WalService(walDir+"/"+nodeId+"/wal.log");
+        }catch(Exception e){
+            LOGGER.error("error while creating wal service, no walDir found or some other error", e);
+            System.exit(1);
+        }
         if(raftSnapShot != null){
             lastApplied = commitIndex = raftSnapShot.getLastAppliedIndex();
             int lastIncludedTerm = raftSnapShot.getLastAppliedTerm();
@@ -113,6 +125,7 @@ public class RaftNode{
             this.currentTerm = raftState.getTerm();
             this.votedFor = raftState.getVotedFor();
         }
+        this.log.appendAll(this.walService.replayFrom(lastApplied));
         this.applyExecutor.submit(wrapRunnableWithMdc(this::applyCommitedEntries));
         inProgress = false;
     }
@@ -279,17 +292,21 @@ public class RaftNode{
     private synchronized void transitionToFollower(){
         role = NodeRole.FOLLOWER;
     }
-    private synchronized void becomeLeader(){
+    private  void becomeLeader(){
         // change the role , cancel the election timer, generate fresh peer state and then 
         // send no op leader confirming message and then start sending heartbeats / appendentries,
         // apply those commited index as in when then come as response from followers
-        role = NodeRole.LEADER;
-        leaderId = nodeId;
-        cancelElectionTimer();
-        clearPeerState();
-        appendNoOpEntryToLog();
-        startPerPeerReplicationThread();
-        // scheduleHeartbeat();
+        synchronized(this){
+            role = NodeRole.LEADER;
+            leaderId = nodeId;
+            cancelElectionTimer();
+            clearPeerState();
+        }
+            appendNoOpEntryToLog();
+        synchronized(this){
+            startPerPeerReplicationThread();
+            // scheduleHeartbeat();
+        }
     }
 
     
@@ -311,7 +328,30 @@ public class RaftNode{
     // because we wont win the next election as the term for next election will be 1 greater than our current term, so we will not be able to replicate uncommited entry to other peers
     // and we will lose uncommited entry.
     private void  appendNoOpEntryToLog(){
-        log.append(getNoOpEntry());
+        LogEntry noOpEntry = getNoOpEntry();
+        CompletableFuture<Void> walfuture = null;
+        synchronized(this){
+            walfuture = walService.append(new WalRecord(EntryType.ENTRY , noOpEntry, 0));
+        }
+        // we have to wait for the response from wal node
+        // .get() blocks until response is available so we have used timeout
+        // waiting outside synchronized block
+        try{
+            walfuture.get(5 , TimeUnit.SECONDS);
+        }catch(Exception e){
+            LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
+                "while appending entry to wal , please check stack trace ", e);
+            System.exit(1);
+        }
+        synchronized(this){
+            if(walfuture != null && walfuture.isDone()){
+                log.append(noOpEntry);
+            }
+            else{
+                LOGGER.error("wal future is null or not done....Exiting System");
+                System.exit(1);
+            }
+        }
         
     }
     private void startPerPeerReplicationThread(){
@@ -505,47 +545,90 @@ public class RaftNode{
     term will be requests term because the node which will look at these responses should know for which term it received
     the response matchIndex = last log index we have successfully appended in our log
      */
-    public synchronized AppendEntriesResponse handleAppendEntries(AppendEntriesRequest request){
+    public AppendEntriesResponse handleAppendEntries(AppendEntriesRequest request){
         MDC.put("nodeId", nodeId);
         LOGGER.info("term {} node id {} handling append entries request {} ", currentTerm, nodeId, request);
-        AppendEntriesResponse  response = builAppendEntriesResponse();
-        if(request.getTerm() < currentTerm){
+        CompletableFuture<Void> walfuture = null;
+        AppendEntriesResponse response = builAppendEntriesResponse();
+        synchronized(this){
+            if(request.getTerm() < currentTerm){
+                return response;
+            }
+            // we cannot be leader if node who is asking for appending entries has more term than us
+            if(request.getTerm() > currentTerm){
+                stepDownDueToHigherTerm(request.getTerm());
+            }
+    
+            // if(role == NodeRole.LEADER)cancelHeartbeatTimer();
+            transitionToFollower();
+    
+            leaderId = request.getLeaderId();
+            // hearbeats interval/append entries interval << election timeout i.e. before election timeout we will send hearbeats/appendentries
+            resetElectionTimer();
+            // whether the node which is asking for appending entry has updated log 
+            if(!log.hasMatchAt(request.getPrevLogIndex() , request.getPrevLogTerm())){
+                response.setSuccess(false);
+                return response;
+            }
+            // if the node which is asking us to append entry has updated log then we can safely append it in our log
+            if(log.lastIndex() >= request.getPrevLogIndex() + 1){
+                walfuture = walService.append(new WalRecord(EntryType.TRUNCATE , null, request.getPrevLogIndex() + 1));
+            }
+            // we have to wait for the response from wal node
+            // .get() blocks until response is available so we have used timeout
+            // waiting outside synchronized block
+        }
+        if(walfuture != null){
+            try{
+                walfuture.get(5 , TimeUnit.SECONDS);
+            }catch(Exception e){
+                LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
+                    "while appending entry to wal , please check stack trace ", e);
+                System.exit(1);
+            }
+        }
+        
+        synchronized(this){
+            log.truncateFrom(request.getPrevLogIndex() + 1);
+        
+            // we have to append all the entries in the request to our wal log and then wait for it complete
+            for(LogEntry entry : request.getEntries()){
+                walfuture = walService.append(new WalRecord(EntryType.ENTRY , entry, 0));
+            }
+        }
+        // we have to wait for the response from wal node
+        // .get() blocks until response is available so we have used timeout
+        // waiting outside synchronized block
+        if(walfuture != null){
+            try{
+                walfuture.get(5 , TimeUnit.SECONDS);
+            }catch(Exception e){
+                LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
+                    "while appending entry to wal , please check stack trace ", e);
+                System.exit(1);
+            }
+        }
+        synchronized(this){
+            
+            for(LogEntry entry : request.getEntries()){
+                log.append(entry);
+            }
+        
+            // as we have updated our log , we need to move/change our commit index as well
+            if(request.getLeaderCommit() > commitIndex)
+                commitIndex = Math.min(request.getLeaderCommit() , log.lastIndex());
+    
+            // using apply executor to apply entrires in cache , this is single threaded executor because we dont want multiple
+            // threads trying to change cache state as order of opeartions are importnat.
+            // we just notify waiting applyexecutor thread and that's all rest of things will be taken care by woken up thread.
+            this.notifyAll();
+            // match index tell the leader to sent next index  = log.lastlogindex + 1
+            response.setMatchIndex(log.lastIndex());
+            response.setSuccess(true);
+            response.setTerm(currentTerm);
+            LOGGER.info("term {} node id {} enteries appended in log response {} ", currentTerm, nodeId, response);
             return response;
-        }
-        // we cannot be leader if node who is asking for appending entries has more term than us
-        if(request.getTerm() > currentTerm){
-            stepDownDueToHigherTerm(request.getTerm());
-        }
-
-        // if(role == NodeRole.LEADER)cancelHeartbeatTimer();
-        transitionToFollower();
-
-        leaderId = request.getLeaderId();
-        // hearbeats interval/append entries interval << election timeout i.e. before election timeout we will send hearbeats/appendentries
-        resetElectionTimer();
-        // whether the node which is asking for appending entry has updated log 
-        if(!log.hasMatchAt(request.getPrevLogIndex() , request.getPrevLogTerm())){
-            response.setSuccess(false);
-            return response;
-        }
-        // if the node which is asking us to append entry has updated log then we can safely append it in our log
-        log.truncateFrom(request.getPrevLogIndex() + 1);
-        for(LogEntry entry : request.getEntries())log.append(entry);
-
-        // as we have updated our log , we need to move/change our commit index as well
-        if(request.getLeaderCommit() > commitIndex)
-            commitIndex = Math.min(request.getLeaderCommit() , log.lastIndex());
-
-        // using apply executor to apply entrires in cache , this is single threaded executor because we dont want multiple
-        // threads trying to change cache state as order of opeartions are importnat.
-        // we just notify waiting applyexecutor thread and that's all rest of things will be taken care by woken up thread.
-        this.notifyAll();
-        // match index tell the leader to sent next index  = log.lastlogindex + 1
-        response.setMatchIndex(log.lastIndex());
-        response.setSuccess(true);
-        response.setTerm(currentTerm);
-        LOGGER.info("term {} node id {} enteries appended in log response {} ", currentTerm, nodeId, response);
-        return response;
+        }   
 
     }
 
@@ -571,15 +654,52 @@ public class RaftNode{
     public CompletableFuture<String> propose(String command){
 
         CompletableFuture<String> future = new CompletableFuture<>();
+        CompletableFuture<Void> walfuture = null;
+        // multiple threads trying to append entry to log at same index
+        // this is not a problem because we are using atomic long for index
+        // and we are using synchronized blocks to access wal and log
+        AtomicInteger atomicIntIndex = new AtomicInteger(log.lastIndex());
+        LogEntry logEntry = null;
+        int index = -1;
         synchronized(this){
             if(!isLeader()){
                 String message = leaderId == null ? "Election in progress " : "Not Leader: "+leaderId;
                 future.completeExceptionally(new IllegalStateException(message));
                 return future;
             }
-            int index = log.lastIndex() + 1;
-            log.append(new LogEntry(index, command, currentTerm, false));
-            pendingRequests.put(index, future);
+            index = atomicIntIndex.getAndIncrement();
+            logEntry = new LogEntry(index, command, currentTerm, false);
+            walfuture = walService.append(new WalRecord(EntryType.ENTRY , logEntry, 0));
+        }
+        
+        if(logEntry == null || atomicIntIndex.get() == -1 || walfuture == null){
+            LOGGER.error("logEntry or walfuture or index not present :( , please check stack trace ");
+            System.exit(1);
+        }
+        // waiting outside synchronized block so that rest of threads can continue accessing shared state
+        // we have to wait for the response from wal node
+        // .get() blocks until response is available so we have used timeout
+        try{
+            walfuture.get(5 , TimeUnit.SECONDS);
+        }catch(Exception e){
+            LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
+             "while appending entry to wal , please check stack trace ", e);
+            System.exit(1);
+        }
+        synchronized(this){
+            if(walfuture != null && walfuture.isDone()){
+                try{
+                    log.append(logEntry);
+                    pendingRequests.put(index, future);
+                }catch(Exception e){
+                    LOGGER.error("Couldn't append entry to log :( , please check stack trace ", e);
+                    System.exit(1);
+                }
+            }
+            else{
+                LOGGER.error("wal future is null or not done....Exiting System");
+                System.exit(1);
+            }
         }
 
         return future;

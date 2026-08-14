@@ -73,8 +73,9 @@ public class Server {
             String stateDir = properties.getProperty("stateDir");
             String snapshotDir = properties.getProperty("snapshotDir");
             String tmpDir = properties.getProperty("tmpDir");
+            String walDir = properties.getProperty("walDir");
             Server server = new Server();
-            server.start(peers, nodeId , clientPort , raftPort, stateDir, snapshotDir, tmpDir);
+            server.start(peers, nodeId , clientPort , raftPort, stateDir, snapshotDir, tmpDir, walDir);
 
         }catch(Exception e){
             e.printStackTrace();
@@ -82,13 +83,13 @@ public class Server {
         
     }
     
-    public void start(ArrayList<String> peers, String nodeId, int clientPort,int raftPort, String stateDir, String snapshotDir, String tmpDir) throws IOException{
+    public void start(ArrayList<String> peers, String nodeId, int clientPort,int raftPort, String stateDir, String snapshotDir, String tmpDir, String walDir) throws IOException{
         // selector to notify about new connections
         if(peers.size() == 0) throw new IllegalArgumentException("No peers provided");
         if(nodeId == null) throw new IllegalArgumentException("No nodeId provided");
         cache = new Cache();
         raftTransport = new SocketRaftTransport();
-        raftNode = new RaftNode(peers, nodeId, cache , raftTransport, stateDir, snapshotDir, tmpDir);
+        raftNode = new RaftNode(peers, nodeId, cache , raftTransport, stateDir, snapshotDir, tmpDir ,walDir);
         raftRpcServer = new RaftRpcServer(raftPort, raftNode);
         raftNode.start();
         raftRpcServer.start();

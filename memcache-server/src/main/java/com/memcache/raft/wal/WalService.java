@@ -4,11 +4,15 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -37,6 +41,7 @@ public class WalService {
     public WalService(String walPath) throws IOException{
 
         this.walFilePath = walPath;
+        createFileWithPermissions(walFilePath); 
         Path path = Paths.get(walFilePath);
         this.walQueue = new LinkedBlockingQueue<>();
         this.walFileChannel = FileChannel.open(path,StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
@@ -247,6 +252,33 @@ public class WalService {
         }
     }
 
+    public boolean createFileWithPermissions(String filePath){
+        Path path = Path.of(filePath);
+        try{
+            Files.createDirectory(path.getParent());
+            Files.createFile(path);
+            Set<PosixFilePermission> permissions = PosixFilePermissions.fromString("rwxr-xr-x");
+            Files.setPosixFilePermissions(Path.of(filePath), permissions);
+        }catch(IOException e){
+            // its importatnt to note that we wont get IOexception while creating parent directories or giving them permissions
+            // but lets say the dirPath has file in it or we dont have sufficient permissinos or fiel system is read only 
+            LOGGER.error("error while directory creation , check stack trace ",e);
+            return false;
+        }
+        return true;
+    }
+    
+    public void shutdown(){
+        if(walQueue != null) walQueue.clear();
+        if(executorService != null) executorService.shutdownNow();
+        if(walFileChannel != null){
+            try{
+                walFileChannel.close();
+            }catch(Exception e){
+                e.printStackTrace();
+            }
+        }
+    }
     public void print(List<LogEntry> raftlog){
         LOGGER.info("--------------------------------------printing log entries ----------------------------------\n");
         for(LogEntry logEntry : raftlog){

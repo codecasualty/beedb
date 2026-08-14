@@ -41,6 +41,7 @@ public class RaftClusterTest {
     private String stateDir = null;
     private String snapshotDir = null;
     private String tmpDir = null;
+    private String walDir = null;
     @Rule
     public TemporaryFolder folder = new TemporaryFolder();
     @Before
@@ -51,9 +52,10 @@ public class RaftClusterTest {
         snapshotDir = folder.newFolder("snapshots").getAbsolutePath();
         tmpDir = folder.newFolder("tmp").getAbsolutePath();
         folder.newFolder("logs").getAbsoluteFile();
-        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir);
-        RaftNode raftNode2 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir);
-        RaftNode raftNode3 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir);
+        walDir = folder.newFolder("wal").getAbsolutePath();
+        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
+        RaftNode raftNode2 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
+        RaftNode raftNode3 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
         raftNodeAddress.put(raftNode1, "localhost:11211");
         raftNodeAddress.put(raftNode2, "localhost:11212");
         raftNodeAddress.put(raftNode3, "localhost:11213");

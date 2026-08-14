@@ -102,4 +102,8 @@ public class RaftLog {
         logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex , logEntries.size()));
     }
 
+    public void appendAll(List<LogEntry> entries){
+        logEntries.addAll(entries);
+    }
+
 }
