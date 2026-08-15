@@ -53,25 +53,14 @@ public class WalService {
     }
     
     public void start(){
-        while(true){
+        while(!Thread.currentThread().isInterrupted()){
             try{
                 writeToFile();
             }catch(Exception e){
-                e.printStackTrace();
+                // e.printStackTrace();
+                LOGGER.error("file in which write failed is {}", walFilePath);
                 LOGGER.error("error while writing to file, please check stack trace ", e);
-                List<PendingWrite> records = new ArrayList<>();
-                walQueue.drainTo(records);
-                for(PendingWrite pending : records){
-                    pending.future.completeExceptionally(e);
-                }
-                executorService.shutdown();
-                try {
-                    executorService.awaitTermination(1000, TimeUnit.MILLISECONDS);
-                } catch (InterruptedException e1) {
-                    // TODO Auto-generated catch block
-                    e1.printStackTrace();
-                    LOGGER.error("error while writing to file, please check stack trace ", e1);
-                }
+                shutdown();
                 break;
             }
         }
@@ -80,15 +69,29 @@ public class WalService {
     public CompletableFuture<Void> append(WalRecord walRecord){
         CompletableFuture<Void> future = new CompletableFuture<>();
         walQueue.add(new PendingWrite(walRecord, future));
+        LOGGER.info("appending an entry in wal queue , entry is {}", walRecord);
+        LOGGER.info("appending an entry in wal queue, wal queue size is {}", walQueue.size());
         return future;
     }
     
     public void writeToFile() throws Exception{
         CRC32 crc32 = new CRC32();
         List<PendingWrite> records = new ArrayList<>();
-        PendingWrite pendingWrite = walQueue.take();
+        PendingWrite pendingWrite = null;
+        // take is blocking and interruptible call in nature, so when we try to close the resource and this thread is 
+        // waiting for take to complete , it will be interrupted and we will get an exception
+        // therefore its good to use try and cathc block
+        try{
+            pendingWrite = walQueue.take();
+        }
+        catch(InterruptedException e){
+            Thread.currentThread().interrupt();
+            // LOGGER.error("error while taking from queue , please check stack trace ", e);
+            return ;
+        } 
         records.add(pendingWrite);
         walQueue.drainTo(records);
+        LOGGER.info("we have taken the records from queue");
         for(PendingWrite pending : records){
             WalRecord walRecord = pending.walRecord;
             // length crc data \n
@@ -99,15 +102,18 @@ public class WalService {
             crc32.update(bytes);
             long checksum = crc32.getValue();
             String emit = String.format("%08d %010d ", bytes.length, checksum) + json + "\n";
+            LOGGER.info("going to write in files {} ", emit);
             walFileChannel.write(ByteBuffer.wrap(emit.getBytes(StandardCharsets.UTF_8)));
             LOGGER.info("wal record is {} written to file", walRecord);
             
         }
         // fsync
         walFileChannel.force(true);
+        LOGGER.info("we have written all the records in queue");
         for(PendingWrite pending : records){
             pending.future.complete(null);
         }
+        LOGGER.info("we have completed all the futures in queue");
 
     }
     

@@ -106,4 +106,7 @@ public class RaftLog {
         logEntries.addAll(entries);
     }
 
+    public int firstIndex(){
+        return logEntries.get(0).getIndex();
+    }
 }
