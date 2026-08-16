@@ -20,12 +20,12 @@ public class RaftLog {
     public RaftLog(){
         logEntries = new ArrayList<LogEntry>();
         // adding a sentenel entry to log
-        logEntries.add(new LogEntry(0, null, 0, true));
+        logEntries.add(new LogEntry(0, null, 0, true, null ));
     }
 
     public RaftLog(int lastIncludedIndex , int lastIncludedTerm){
         logEntries = new ArrayList<LogEntry>();
-        logEntries.add(new LogEntry(lastIncludedIndex, null, lastIncludedTerm, true));
+        logEntries.add(new LogEntry(lastIncludedIndex, null, lastIncludedTerm, true, null));
     }
     public int lastIndex(){
         return logEntries.get(logEntries.size() - 1).getIndex();
@@ -98,15 +98,24 @@ public class RaftLog {
         this.lastIncludedTerm = term;
     }
 
-    public void compactTill(int index){
-        logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex , logEntries.size()));
+    public boolean compactTill(int index){
+        logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex - 1 , logEntries.size()));
+        return true;
     }
 
     public void appendAll(List<LogEntry> entries){
         logEntries.addAll(entries);
     }
 
-    public int firstIndex(){
+    public int getFirstIndex(){
         return logEntries.get(0).getIndex();
+    }
+
+    public int getLastIncludedIndex(){
+        return lastIncludedIndex;
+    }
+
+    public int getLastIncludedTerm(){
+        return lastIncludedTerm;
     }
 }

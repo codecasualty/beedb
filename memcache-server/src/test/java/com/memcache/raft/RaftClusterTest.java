@@ -4,6 +4,7 @@ import com.memcache.cache.Cache;
 import com.memcache.cache.CacheItem;
 import com.memcache.command.Command;
 import com.memcache.command.CommandType;
+import com.memcache.raft.wal.WalService;
 
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -28,6 +29,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -499,6 +501,78 @@ public class RaftClusterTest {
 
         }
 
+    }
+
+    @Test
+    public void shouldReadWalAfterRestart() throws InterruptedException{
+
+        RaftNode leader = findLeader();
+        List<String> peerAddress = leader.getPeerAddressList();
+        Command command = new Command(CommandType.SET, "Foo", 0, 0, 4);
+        command.setValue("code".getBytes());
+        CompletableFuture<String> future = leader.propose(command.serialize());
+        try{
+            future.get(100, TimeUnit.SECONDS);
+        }catch(Exception e){
+            fail("Test failed, expected value to be stored in cluster");
+        }
+        RaftLog raftlog = leader.getLog();
+        raftTransport.removeRaftNode(raftNodeAddress.get(leader));
+        raftNodesList.remove(leader);
+        leader.stop();
+        Thread.sleep(500);
+        LOGGER.info("--------------------leader is stopped------------------");
+        // now we will spawn a new node and put it in leaders position 
+        RaftNode newNode = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
+        // raftNodeAddress.put(newNode, "localhost:11211");
+        // raftTransport.addRaftNode(raftNodeAddress.get(newNode), newNode);
+        // raftNodesList.add(newNode);
+        // newNode.start();
+        LOGGER.info("--------------------new node is reading from wal ------------------");
+
+        Thread.sleep(500);
+        // now check if we are able to read the wal and state from the stored system
+        RaftLog raftlogNewNode = newNode.getLog();
+        assertEquals(raftlog.lastIndex(), raftlogNewNode.lastIndex());
+        assertEquals(raftlog.lastTerm(), raftlogNewNode.lastTerm());
+        assertEquals(raftlog.size(), raftlogNewNode.size());
+        for(int i = raftlog.getLastIncludedIndex(); i < raftlog.lastIndex() ;i++){
+            LOGGER.info("raftlog.get({}) is {} and raftlogNewNode.get({}) is {}", i, raftlog.get(i), i, raftlogNewNode.get(i));
+            assertEquals(raftlog.get(i) , raftlogNewNode.get(i));
+        }
+    }
+
+    @Test
+    public void shouldCompactLog() throws InterruptedException{
+        RaftNode leader = findLeader();
+        List<CompletableFuture<String>> futures = new ArrayList<>();
+        // 5 entries will be compacted and one extra entry will be appended in wal
+        for(int i = 0;i < 6;i++){
+            Command command = new Command(CommandType.SET , "key"+i,0, 0 , 6);
+            command.setValue(("value"+i).getBytes());
+            CompletableFuture<String> result = leader.propose(command.serialize());
+            futures.add(result);
+        }
+        for(CompletableFuture<String> future : futures){
+            try {
+                String response = future.get(300, TimeUnit.MILLISECONDS);
+                assertEquals("STORED\r\n", response);
+            } catch (Exception e) {
+                fail("Test failed raise exception");
+            }
+        }
+
+        Thread.sleep(500);
+        assertEquals(3, leader.getLog().size());
+        assertEquals(5, leader.getLog().getFirstIndex());
+        List<LogEntry> raftlog = leader.walService.replayFrom(leader.getLog().getLastIncludedIndex());
+        for(LogEntry logEntry : raftlog){
+            LOGGER.info("log entry after compaction is {}", logEntry);
+        }
+        // because index 0 is sentenel entry , index 1 will be leader no op entry
+        // index 2 - 7 will be keys from key0 index 2, key 1 -> index 3 , key 2 -> index 4 , key 3 -> index 5
+        // key 4 -> index 6 , key 5 -> index 7 ,  till key5
+        // so when we are doing compaction till index 5, 
     }
 
 }

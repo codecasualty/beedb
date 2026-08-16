@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -93,7 +94,18 @@ public class WalService {
         walQueue.drainTo(records);
         LOGGER.info("we have taken the records from queue");
         for(PendingWrite pending : records){
-            WalRecord walRecord = pending.walRecord;
+            WalRecord walRecordDummy = pending.walRecord;
+            if(walRecordDummy.getEntryType() == EntryType.COMPACT){
+                compact(walRecordDummy);
+                continue;
+            }
+            WalRecord walRecord = null;
+            LogEntry logEntryDummy = walRecordDummy.logEntry;
+            if(logEntryDummy == null) walRecord = walRecordDummy;
+            else{
+                LogEntry logEntry = new LogEntry(logEntryDummy.getIndex(), logEntryDummy.getCommand(), logEntryDummy.getTerm(), logEntryDummy.isNoOp(), "");
+                walRecord = new WalRecord(walRecordDummy.entryType, logEntry, walRecordDummy.fromIndex);
+            }
             // length crc data \n
             // length of only payload
             String json = objectMapper.writeValueAsString(walRecord);
@@ -115,6 +127,77 @@ public class WalService {
         }
         LOGGER.info("we have completed all the futures in queue");
 
+    }
+
+    public void compact(WalRecord walRecord){
+        int compactIndex = walRecord.getFromIndex();
+        Path path = Path.of(walFilePath);
+        String tempFilePath = "/tmp"+path.getParent().toString()+"/"+"wal.temp";
+        LOGGER.info("temp file path is {}", tempFilePath);
+        createFileWithPermissions(tempFilePath);
+        // now we will copy all entries from wal only from compactIndex till last element in wal
+        // but during this time , we wont be carrying any inserts in our original wal file
+        // so we will be writing all the entries in temp file
+        try(
+
+            FileChannel tempFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
+        ){    
+            walFileChannel.position(0);
+            while(walFileChannel.position() < walFileChannel.size()){
+                // we have entry in format 20 + json body (spanned over length of json body) + \n
+                // so we will read 20 bytes and then read length of json body and then read \n
+                ByteBuffer buffer = ByteBuffer.allocate(8);
+                while(buffer.hasRemaining()){
+                    int val = walFileChannel.read(buffer);
+                    if(val == -1){
+                        break;
+                    }
+                }
+                // we dont need to verify if our buffer is valid or not , because we are reading from wal file
+                buffer.flip();
+                int length = Integer.parseInt(new String(buffer.array(), StandardCharsets.UTF_8));
+                ByteBuffer remainingBytes = ByteBuffer.allocate(12);
+                while(remainingBytes.hasRemaining()){
+                    int val = walFileChannel.read(remainingBytes);
+                    if(val == -1)break;
+                }
+                remainingBytes.flip();
+                ByteBuffer jsonBody = ByteBuffer.allocate(length);
+                while(jsonBody.hasRemaining()){
+                    int read = walFileChannel.read(jsonBody);
+                    if(read == -1){
+                        break;
+                    }
+                }
+                jsonBody.flip();
+                String jsonString = new String(jsonBody.array(), StandardCharsets.UTF_8);
+                LOGGER.info("json string is {}", jsonString);
+                // parsing into walrecord
+                WalRecord currentWalRecord = objectMapper.readValue(jsonString, WalRecord.class);
+                if(
+                    (EntryType.ENTRY == currentWalRecord.getEntryType() && currentWalRecord.getLogEntry().getIndex() > compactIndex) ||
+                    (EntryType.TRUNCATE == currentWalRecord.getEntryType() && currentWalRecord.getFromIndex() > compactIndex)
+                ){
+                    tempFileChannel.write(buffer);
+                    tempFileChannel.write(remainingBytes);
+                    tempFileChannel.write(jsonBody);
+                    LOGGER.info("entry is written to temp file channel");
+                }
+                walFileChannel.position(walFileChannel.position() + 1);
+            }
+            tempFileChannel.force(true);
+            LOGGER.info("insertion is complete on temp file channel ");
+            Path sourcePath = Path.of(tempFilePath);
+            Path targetPath = Path.of(walFilePath);
+            LOGGER.info("moving file from {} to {}", sourcePath, targetPath);
+            Files.move(sourcePath, targetPath, StandardCopyOption.ATOMIC_MOVE);
+            LOGGER.info("file moved ");
+            walFileChannel = FileChannel.open(Path.of(walFilePath), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
+            print(walFileChannel);
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+        // we have to reopen our actual file channel 
     }
     
     // reutrn a new list of log entries and caller decides either to remove its original copy
@@ -245,6 +328,10 @@ public class WalService {
             truncate(recordStart);
         }
         goodSegmentEnd = -1;
+        LOGGER.info("----------------------------  wal size is {} ", raftlog.size());
+        for(LogEntry logEntry : raftlog){
+            LOGGER.info("---------------------------- restrored entry  from wal is {}", logEntry);
+        }
         return raftlog;
         
     }
@@ -260,9 +347,16 @@ public class WalService {
 
     public boolean createFileWithPermissions(String filePath){
         Path path = Path.of(filePath);
+        Path dirPath = path.getParent();
         try{
-            Files.createDirectory(path.getParent());
-            Files.createFile(path);
+            
+            Files.createDirectories(dirPath);
+            LOGGER.info("directory created at {}", dirPath);
+        
+            if(!Files.exists(path)){
+                Files.createFile(path);
+                LOGGER.info("file created at {}", filePath);
+            }
             Set<PosixFilePermission> permissions = PosixFilePermissions.fromString("rwxr-xr-x");
             Files.setPosixFilePermissions(Path.of(filePath), permissions);
         }catch(IOException e){
@@ -301,6 +395,20 @@ public class WalService {
         String str = new String(bytes, StandardCharsets.UTF_8);
         LOGGER.info("buffer is {} ", str);
         LOGGER.info("----------------------------------------\n");
+    }
+
+    public void print(FileChannel fileChannel) throws IOException{
+        long endPointer = fileChannel.position();
+        LOGGER.info("end pointer is {} ", endPointer);
+        LOGGER.info("printing file channel ----------------------------------\n");
+        ByteBuffer buffer = ByteBuffer.allocate((int)endPointer);
+        fileChannel.write(buffer);
+        buffer.flip();
+        printBuffer(buffer);
+        fileChannel.position(endPointer);
+        LOGGER.info("----------------------------------------\n");
+
+
     }
 
     public long getPosition() throws IOException{

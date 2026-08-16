@@ -9,6 +9,7 @@ import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.After;
@@ -44,10 +45,10 @@ public class WalServiceTest {
      */
 
     public List<CompletableFuture<Void>> insert(){
-        CompletableFuture<Void> future1 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(1, CommandType.SET.toString(), 0, false), 0));
-        CompletableFuture<Void> future2 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(2, CommandType.SET.toString(), 0, false), 0));
-        CompletableFuture<Void> future3 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(3, CommandType.SET.toString(), 0, false), 0));
-        CompletableFuture<Void> future4 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(4, CommandType.SET.toString(), 0, false), 0));
+        CompletableFuture<Void> future1 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(1, CommandType.SET.toString(), 0, false, UUID.randomUUID().toString()), 0));
+        CompletableFuture<Void> future2 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(2, CommandType.SET.toString(), 0, false, UUID.randomUUID().toString()), 0));
+        CompletableFuture<Void> future3 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(3, CommandType.SET.toString(), 0, false, UUID.randomUUID().toString()), 0));
+        CompletableFuture<Void> future4 = walService.append(new WalRecord(EntryType.ENTRY, new LogEntry(4, CommandType.SET.toString(), 0, false, UUID.randomUUID().toString()), 0));
         CompletableFuture<Void> future5 = walService.append(new WalRecord(EntryType.TRUNCATE, null, 2));
         future1.join();
         future2.join();

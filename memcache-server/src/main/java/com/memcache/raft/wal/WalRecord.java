@@ -10,6 +10,7 @@ public class WalRecord {
     EntryType entryType;
     LogEntry logEntry;
     int fromIndex;
+    // fromIndex works as start pointer in case of truncate and end pointer in case of compact
     @JsonCreator
     public WalRecord(
         @JsonProperty("entryType") EntryType entryType,

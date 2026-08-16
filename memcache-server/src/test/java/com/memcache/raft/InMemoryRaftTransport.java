@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.HashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 public class InMemoryRaftTransport implements RaftTransport {
     
@@ -31,17 +32,30 @@ public class InMemoryRaftTransport implements RaftTransport {
 
     @Override
     public RequestVoteResponse sendRequestVoteToPeer(RequestVoteRequest request, String peer) {
-        LOGGER.info("Vote Request by node {} to peer{} request is {} ", request.getCandidateId() , peer, request);
+        Map<String , String> saved = MDC.getCopyOfContextMap();
+        LOGGER.info("Request Vote Req by node {} to peer{} request is {} ", request.getCandidateId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
-        if(raftNode == null) return null;
-        return raftNode.handleRequestVote(request);
+        try{
+            if(raftNode == null) return null;
+            return raftNode.handleRequestVote(request);
+        }finally{
+            if(saved != null) MDC.setContextMap(saved);
+            else MDC.clear();
+        }
     }
+     
 
     @Override
     public AppendEntriesResponse sendAppendEntriesToPeer(AppendEntriesRequest request, String peer) {
+        Map<String , String> saved = MDC.getCopyOfContextMap();
         LOGGER.info("Append Entry Req by node {} to peer{} request is {} ", request.getLeaderId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
-        if(raftNode == null) return null;
-        return raftNode.handleAppendEntries(request);
+        try{
+            if(raftNode == null) return null;
+            return raftNode.handleAppendEntries(request);
+        }finally{
+            if(saved != null) MDC.setContextMap(saved);
+            else MDC.clear();
+        }
     }
 }

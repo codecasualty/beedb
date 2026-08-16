@@ -79,6 +79,10 @@ public class AppendEntriesRequest {
         this.entries = entries;
     }
 
+    public LogEntry getEntry(int index){
+        return entries.get(index);
+    }
+    
     public String toString(){
         return "AppendEntriesRequest{" +
                 "term=" + term +
