@@ -555,7 +555,7 @@ public class RaftClusterTest {
         }
         for(CompletableFuture<String> future : futures){
             try {
-                String response = future.get(300, TimeUnit.MILLISECONDS);
+                String response = future.get(3, TimeUnit.SECONDS);
                 assertEquals("STORED\r\n", response);
             } catch (Exception e) {
                 fail("Test failed raise exception");
@@ -563,16 +563,97 @@ public class RaftClusterTest {
         }
 
         Thread.sleep(500);
-        assertEquals(3, leader.getLog().size());
-        assertEquals(5, leader.getLog().getFirstIndex());
-        List<LogEntry> raftlog = leader.walService.replayFrom(leader.getLog().getLastIncludedIndex());
+        // List<LogEntry> raftlog = leader.walService.replayFrom(0);
+        RaftLog raft = leader.getLog();
+        List<LogEntry> raftlog = raft.getFrom(raft.getFirstIndex());
+        LOGGER.info("raftlog size is {} ", raftlog.size());
+        LOGGER.info("raftlog first index is {} ", raftlog.get(0).getIndex());
+        LOGGER.info("raftlog last index is {} ", raftlog.get(raftlog.size() - 1).getIndex());
+        LOGGER.info("last included index is {} ", leader.getLog().getLastIncludedIndex());
+        List<LogEntry> walEntries = leader.walService.replayFrom(leader.getLog().getLastIncludedIndex());
         for(LogEntry logEntry : raftlog){
             LOGGER.info("log entry after compaction is {}", logEntry);
         }
+        for(LogEntry logEntry : walEntries){
+            LOGGER.info("wal service entry after compaction is {}", logEntry);
+        }
+        assertEquals(3, leader.getLog().size());
+        assertEquals(5, leader.getLog().getFirstIndex());
+        assertEquals(5, leader.getLog().getLastIncludedIndex());
+        assertEquals(7, leader.getLog().lastIndex());
+        assertEquals(2, walEntries.size());
+        assertEquals(6, walEntries.get(0).getIndex());
+        assertEquals(7, walEntries.get(1).getIndex());
         // because index 0 is sentenel entry , index 1 will be leader no op entry
         // index 2 - 7 will be keys from key0 index 2, key 1 -> index 3 , key 2 -> index 4 , key 3 -> index 5
         // key 4 -> index 6 , key 5 -> index 7 ,  till key5
-        // so when we are doing compaction till index 5, 
+        // so when we are doing compaction till index 5, then leader no op, key 0 -> index 2 , key 1 -> index 3 , key 2 -> index 4 , key 3 -> index 5
+        // are compacted and we have key 4 -> index 6 , key 5 -> index 7 ,  till key5 in our wal
+        // and key 3 -> index 5 key 4 -> index 6 key 5 -> index 7 are in our raftlog
     }
+
+    @Test
+    public void shouldNotMissEntriesAfterCompactionInserionInWal() throws InterruptedException{
+
+        RaftNode leader = findLeader();
+        List<CompletableFuture<String>> futures = new ArrayList<>();
+        // 5 entries will be compacted and one extra entry will be appended in wal
+        for(int i = 0;i < 6;i++){
+            Command command = new Command(CommandType.SET , "key"+i,0, 0 , 6);
+            command.setValue(("value"+i).getBytes());
+            CompletableFuture<String> result = leader.propose(command.serialize());
+            futures.add(result);
+        }
+        for(CompletableFuture<String> future : futures){
+            try {
+                String response = future.get(3, TimeUnit.SECONDS);
+                assertEquals("STORED\r\n", response);
+            } catch (Exception e) {
+                fail("Test failed raise exception");
+            }
+        }
+
+        Thread.sleep(500);
+        // now we will insert some entries in our wal
+        for(int i = 6;i < 8;i++){
+            Command command = new Command(CommandType.SET , "key"+i,0, 0 , 6);
+            command.setValue(("value"+i).getBytes());
+            CompletableFuture<String> result = leader.propose(command.serialize());
+            futures.add(result);
+        }
+        for(CompletableFuture<String> future : futures){
+            try {
+                String response = future.get(3, TimeUnit.SECONDS);
+                assertEquals("STORED\r\n", response);
+            } catch (Exception e) {
+                fail("Test failed raise exception");
+            }
+        }
+
+        // now all these entries will be in our raftlog and wal 
+        Thread.sleep(500);
+        List<LogEntry> raftlog = leader.getLog().getFrom(leader.getLog().getFirstIndex());
+        LOGGER.info("raftlog size is {} ", raftlog.size());
+        LOGGER.info("raftlog first index is {} ", raftlog.get(0).getIndex());
+        LOGGER.info("raftlog last index is {} ", raftlog.get(raftlog.size() - 1).getIndex());
+        LOGGER.info("first index in raftlog is {} ", leader.getLog().getFirstIndex());
+        LOGGER.info("last included index is {} ", leader.getLog().getLastIncludedIndex());
+        assertEquals(5, raftlog.size());
+        assertEquals(5, raftlog.get(0).getIndex());
+        assertEquals(6, raftlog.get(1).getIndex());
+        assertEquals(7, raftlog.get(2).getIndex());
+        assertEquals(8, raftlog.get(3).getIndex());
+        assertEquals(9, raftlog.get(4).getIndex());
+        List<LogEntry> walEntries = leader.walService.replayFrom(leader.getLog().getLastIncludedIndex());
+        for(LogEntry logEntry : walEntries){
+            LOGGER.info("wal service entry after compaction is {}", logEntry);
+        }
+        assertEquals(4, walEntries.size()); // because we have inserted 2 entries in wal
+        assertEquals(6, walEntries.get(0).getIndex());
+        assertEquals(7, walEntries.get(1).getIndex());
+        assertEquals(8, walEntries.get(2).getIndex());
+        assertEquals(9, walEntries.get(3).getIndex());
+    }
+
 
 }

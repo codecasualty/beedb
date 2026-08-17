@@ -707,6 +707,7 @@ public class RaftNode{
 
     // backgroud loop which applied commited entires to our cache
     private void applyCommitedEntries(){
+        MDC.put("nodeId", nodeId);
         while(!Thread.currentThread().isInterrupted()){
             
             synchronized(this){
@@ -718,7 +719,7 @@ public class RaftNode{
                     }
                 }
                 lastApplied++;
-                if(lastApplied > snapShotThreshold && !inProgress){
+                if(lastApplied >= snapShotThreshold && !inProgress){
                     // as our above condition says that we have > snapShotThreshold entris 
                     // so we take that state and make sure even in background values of lastapplied , current term or cache state changes
                     // it shouldn't affect our snapshot.
@@ -726,11 +727,14 @@ public class RaftNode{
                     final int snapShotApplied = lastApplied;
                     final int snapShotTerm = log.termAt(snapShotApplied);
                     final Map<String, CacheItem> cacheState = cache.getState();
+                    Map<String , String> saved = MDC.getCopyOfContextMap();
                     Thread.ofVirtual().start(() -> {
+                        if(saved != null) MDC.setContextMap(saved);
                         boolean snapshotStatus = raftSnapshotManager.serialize(cacheState, snapShotApplied, snapShotTerm , nodeId);
                         // need to lock on this object because we are using virtual threads
                         // without locking we might change the state while some thread is reading it
-                        synchronized(this){
+                        try{
+                            synchronized(this){
                             if(snapshotStatus == true){
                                 boolean compactStatus = log.compactTill(snapShotApplied);
                                 if(compactStatus == false){
@@ -741,13 +745,19 @@ public class RaftNode{
                                 log.setLastIncludedTerm(snapShotTerm);
                                 // it may seem that doing this wal compaction async is wrong, but we are doing it because we know we have taken cache snapstho and logs are turncated, so even
                                 // if wal compaction fails we have snapsthots from where we can restore our cache and later apply wal entries after last included index
+                                LOGGER.info("added an entry to do the compaction in wal");
                                 walService.append(new WalRecord(EntryType.COMPACT, null, snapShotApplied));
+                                LOGGER.info("print file channel after compaction");
+                                walService.printFileChannel();
                                 // after lastapplied > snapshot threshold, each lastapplied + x will trigger snapshot
                                 // to avoid that we keep on increasing snapsthot threshold. that way 
                                 // lastapplied +x wont trigger snapshot until its greater than > lastapplied + 1000
                                 // basically x > 1000
                                 snapShotThreshold = snapShotApplied + 1000;
+                                }
                             }
+                        }finally{
+                            MDC.clear();
                         }
                         inProgress = false;
                     });
@@ -777,6 +787,7 @@ public class RaftNode{
                 LOGGER.info("term {} node id {} applied entry {} at index {} is done", currentTerm, nodeId, entry, lastApplied);
             }
         }
+        MDC.remove("nodeId");
     }
 
     private void resetElectionTimer(){

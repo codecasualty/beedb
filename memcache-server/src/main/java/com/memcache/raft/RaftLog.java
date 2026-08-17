@@ -99,7 +99,7 @@ public class RaftLog {
     }
 
     public boolean compactTill(int index){
-        logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex - 1 , logEntries.size()));
+        logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex , logEntries.size()));
         return true;
     }
 

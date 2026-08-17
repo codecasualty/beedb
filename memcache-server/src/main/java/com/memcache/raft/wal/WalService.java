@@ -131,6 +131,7 @@ public class WalService {
 
     public void compact(WalRecord walRecord){
         int compactIndex = walRecord.getFromIndex();
+        LOGGER.info("compacting till index {} ", compactIndex);
         Path path = Path.of(walFilePath);
         String tempFilePath = "/tmp"+path.getParent().toString()+"/"+"wal.temp";
         LOGGER.info("temp file path is {}", tempFilePath);
@@ -139,9 +140,11 @@ public class WalService {
         // but during this time , we wont be carrying any inserts in our original wal file
         // so we will be writing all the entries in temp file
         try(
-
+            
             FileChannel tempFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
         ){    
+            LOGGER.info("***************printing wal file channel before compaction ");
+            print(walFileChannel);
             walFileChannel.position(0);
             while(walFileChannel.position() < walFileChannel.size()){
                 // we have entry in format 20 + json body (spanned over length of json body) + \n
@@ -162,7 +165,8 @@ public class WalService {
                     if(val == -1)break;
                 }
                 remainingBytes.flip();
-                ByteBuffer jsonBody = ByteBuffer.allocate(length);
+                // adding one extra byte to read \n
+                ByteBuffer jsonBody = ByteBuffer.allocate(length+1);
                 while(jsonBody.hasRemaining()){
                     int read = walFileChannel.read(jsonBody);
                     if(read == -1){
@@ -171,29 +175,57 @@ public class WalService {
                 }
                 jsonBody.flip();
                 String jsonString = new String(jsonBody.array(), StandardCharsets.UTF_8);
-                LOGGER.info("json string is {}", jsonString);
+                // LOGGER.info("json string is {}", jsonString);
                 // parsing into walrecord
                 WalRecord currentWalRecord = objectMapper.readValue(jsonString, WalRecord.class);
                 if(
-                    (EntryType.ENTRY == currentWalRecord.getEntryType() && currentWalRecord.getLogEntry().getIndex() > compactIndex) ||
-                    (EntryType.TRUNCATE == currentWalRecord.getEntryType() && currentWalRecord.getFromIndex() > compactIndex)
+                    (currentWalRecord.getEntryType() == EntryType.ENTRY && currentWalRecord.getLogEntry().getIndex() > compactIndex) ||
+                    (currentWalRecord.getEntryType() == EntryType.TRUNCATE && currentWalRecord.getFromIndex() > compactIndex)
                 ){
+                    // LOGGER.info("printing buffers");
+                    // LOGGER.info("buffer start pointer is {} and limit is {} ", buffer.position(), buffer.limit());
+                    // printBuffer(buffer.duplicate());
                     tempFileChannel.write(buffer);
+                    // LOGGER.info("remaining bytes start pointer is {} and limit is {} ", remainingBytes.position(), remainingBytes.limit());
+                    // printBuffer(remainingBytes.duplicate());
                     tempFileChannel.write(remainingBytes);
+                    // LOGGER.info("json body start pointer is {} and limit is {} ", jsonBody.position(), jsonBody.limit());
+                    // printBuffer(jsonBody.duplicate());
                     tempFileChannel.write(jsonBody);
-                    LOGGER.info("entry is written to temp file channel");
+                    // LOGGER.info("this json string is inserted in tempfile channel {} ", jsonString);
+                    // LOGGER.info("printing buffers done");
+                    // print(tempFileChannel);
+                    // LOGGER.info("entry is written to temp file channel");
                 }
-                walFileChannel.position(walFileChannel.position() + 1);
+                // LOGGER.info("printing tempfile channle after each entry is written ");
+                // print(tempFileChannel);
+                // walFileChannel.position(walFileChannel.position() + 1);
             }
+            LOGGER.info("printing temp file channel after all entries are written");
+            print(tempFileChannel);
             tempFileChannel.force(true);
-            LOGGER.info("insertion is complete on temp file channel ");
+            // Thread.sleep(100);
+            // FileChannel duplicateFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.READ, StandardOpenOption.WRITE);
+            // LOGGER.info("printing duplicate file channel after temp file is forced");
+            // print(duplicateFileChannel);
             Path sourcePath = Path.of(tempFilePath);
             Path targetPath = Path.of(walFilePath);
-            LOGGER.info("moving file from {} to {}", sourcePath, targetPath);
+            // LOGGER.info("moving file from {} to {}", sourcePath, targetPath);
             Files.move(sourcePath, targetPath, StandardCopyOption.ATOMIC_MOVE);
-            LOGGER.info("file moved ");
-            walFileChannel = FileChannel.open(Path.of(walFilePath), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
-            print(walFileChannel);
+            // LOGGER.info("file moved ");
+            walFileChannel.close();
+            // once we are opening an file channel , by default it will start reading from the beginning of the file
+            walFileChannel = FileChannel.open(Path.of(walFilePath),StandardOpenOption.READ, StandardOpenOption.WRITE);
+            // therefore we will start writing from the end of the file
+            walFileChannel.position(walFileChannel.size());
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+        
+        try{
+            LOGGER.info("checking what is stoerd in filechannel after compaction ");
+            print(FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ));
+
         }catch(Exception e){
             e.printStackTrace();
         }
@@ -214,13 +246,16 @@ public class WalService {
         long recordStart = 0;
 
         try{
-            walFileChannel.position(0);
+            LOGGER.info("checking what is stoerd in filechannel before replay is being done ");
+            print(walFileChannel);
             LOGGER.info("from index is {} ", index);
-            LOGGER.info("position is {} ", walFileChannel.position());
+            LOGGER.info("position/end pointer is {} ", walFileChannel.position());
             LOGGER.info("size of file is {} ", walFileChannel.size());
             LOGGER.info("good segment end is {} ", goodSegmentEnd);
+            walFileChannel.position(0);
             while(walFileChannel.position() < walFileChannel.size()){
                 recordStart = walFileChannel.position();
+                // LOGGER.info("start of record is {} ", recordStart);
                 // LOGGER.info(" in while loop position is {} ", walFileChannel.position());
                 ByteBuffer buffer = ByteBuffer.allocate(JSON_LENGTH + 1 + CRC_LENGTH + 1);
                 while(buffer.hasRemaining()){
@@ -230,6 +265,7 @@ public class WalService {
                     }
                 }
                 if(buffer.hasRemaining()){
+                    // LOGGER.info("buffer has remaining bytes {} and therefore we are breaking the loop", buffer.hasRemaining());
                     truncate(recordStart);
                     break;
                 }
@@ -258,31 +294,37 @@ public class WalService {
                 String lengthString = new String(lengthBuffer.array() , StandardCharsets.UTF_8);
                 lengthString = lengthString.trim();
                 long remaining = walFileChannel.size() - walFileChannel.position();
+                // LOGGER.info("length string {} is not a valid integer or remaining bytes {} < length of string {}", lengthString, remaining, lengthString.length());
                 if(!lengthString.matches("\\d+")  || remaining < lengthString.length()){
+                    // LOGGER.info("length string {} is not a valid integer or remaining bytes {} < length of string {}", lengthString, remaining, lengthString.length());
                     truncate(recordStart);
                     break;
                 }
                 int lengthJson = Integer.parseInt(lengthString);
                 ByteBuffer jsonBody = ByteBuffer.allocate(lengthJson);
+                // LOGGER.info("json body end pointer is {} ", jsonBody.position());
                 while(jsonBody.hasRemaining()){
                     int read = walFileChannel.read(jsonBody);
                     if(read == -1){
                         break;
                     }
                 }
+                // LOGGER.info("json body end pointer is {} ", jsonBody.position());
 
                 if(jsonBody.hasRemaining()){
+                    // LOGGER.info("json body has remaining bytes {} and therefore we are breaking the loop , json end pointer is {} ", jsonBody.hasRemaining(), jsonBody.position());
                     truncate(recordStart);
                     break;
                 }
                 // read json string and convert it to WalRecord
                 String jsonString = new String(jsonBody.array(), StandardCharsets.UTF_8);
+                // LOGGER.info("json string while reading from file is {}", jsonString);
                 // parse and verify json string, this is necessary because while writing someone might have corrupted the json string
                 // and we only support utf-8 encoding
                 byte[] utf8Bytes = jsonString.getBytes(StandardCharsets.UTF_8);
                 String reEncodedJsonString = new String(utf8Bytes, StandardCharsets.UTF_8);
                 if(!jsonString.equals(reEncodedJsonString)){
-                    LOGGER.error("corrupted json string {} ", jsonString);
+                    // LOGGER.error("corrupted json string {} ", jsonString);
                     truncate(recordStart);
                     break;
                 }
@@ -308,21 +350,24 @@ public class WalService {
                     } else if (logEntry != null && logEntry.getIndex() > index) {
                         raftlog.add(logEntry);                            
                     }
-                    
-                    print(raftlog);
                 }else{
                     goodSegmentEnd = recordStart ;
                     truncate(goodSegmentEnd);
                     break;
                 }
+                // LOGGER.info("printing raftlog in replay from method at each step ");
+                // print(raftlog);
                 // LOGGER.info("-----------------********-----------------------\n");
                 // for \n after json body we have to read one more byte
                 // the reason for this is that we are reading the json body and we have to read the \n after json body
                 // and if we don't read \n then we will be reading the next record
                 // also we are doing this after completoin of complete logic because at this point of time, we are sure that 
                 // our wal is valid
+                // LOGGER.info("end of record is {} ", walFileChannel.position());
                 walFileChannel.position(walFileChannel.position() + 1);
             }
+            // LOGGER.info("position/end pointer is {} ", walFileChannel.position());
+            // LOGGER.info("size of file is {} ", walFileChannel.size());
         }catch(Exception e){
             e.printStackTrace();
             truncate(recordStart);
@@ -399,16 +444,32 @@ public class WalService {
 
     public void print(FileChannel fileChannel) throws IOException{
         long endPointer = fileChannel.position();
-        LOGGER.info("end pointer is {} ", endPointer);
+        fileChannel.position(0);
+        LOGGER.info("end pointer is {} file size is {} ", endPointer, fileChannel.size());
         LOGGER.info("printing file channel ----------------------------------\n");
-        ByteBuffer buffer = ByteBuffer.allocate((int)endPointer);
-        fileChannel.write(buffer);
+        ByteBuffer buffer = ByteBuffer.allocate((int)fileChannel.size());
+        while(buffer.hasRemaining()){
+            int val = fileChannel.read(buffer);
+            if(val == -1){
+                break;
+            }
+        }
         buffer.flip();
         printBuffer(buffer);
         fileChannel.position(endPointer);
+        LOGGER.info("final position of file channel is {} ", fileChannel.position());
         LOGGER.info("----------------------------------------\n");
 
 
+    }
+
+    public void printFileChannel() {
+        try{
+            print(FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ));
+
+        }catch(Exception e){
+            e.printStackTrace();
+        }
     }
 
     public long getPosition() throws IOException{
