@@ -12,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.memcache.raft.rpc.AppendEntriesRequest;
 import com.memcache.raft.rpc.AppendEntriesResponse;
+import com.memcache.raft.rpc.InstallSnapshotRequest;
+import com.memcache.raft.rpc.InstallSnapshotResponse;
 import com.memcache.raft.rpc.RequestVoteRequest;
 import com.memcache.raft.rpc.RequestVoteResponse;
 
@@ -99,6 +101,45 @@ public class SocketRaftTransport implements RaftTransport {
             LOGGER.error("print stacktrace", e);
 
             LOGGER.info("term {} node id {} leader is {} and follower is {} request is {} ", currentTerm, nodeId, leaderId, peer, request);
+            LOGGER.info("Exception in sendAppendEntriesToPeerInParallel", e);
+        }
+        return response;
+    }
+
+    @Override
+    public InstallSnapshotResponse sendInstallSnapshotToPeer(InstallSnapshotRequest request, String peer) {
+        int currentTerm = request.getTerm();
+        String nodeId = request.getLeaderId();
+        String followerId = peer;
+        InstallSnapshotResponse response = null;
+        String[] address = peer.split(":");
+        int port = Integer.parseInt(address[1]);
+        String ip = address[0];
+        LOGGER.info("term {} node id {} install snapshot request {} to peer {} ", currentTerm, nodeId, request, peer);
+        try(Socket socket = new Socket(ip , port)){
+            socket.setSoTimeout(100);
+            // first make json envelope
+            // jackson can serialize appendentriesrequest automatically because it has getters
+            Map<String , Object> envelope = Map.of(
+                "rpcType" , "INSTALL_SNAPSHOT",
+                "payload", request
+            );
+            String json = objectMapper.writeValueAsString(envelope)+"\r\n";
+            // write this into sockets output stream 
+            socket.getOutputStream().write(json.getBytes());
+            socket.getOutputStream().flush();
+            LOGGER.info("term {} node id {} written to socket {} and request {} ", currentTerm, nodeId, socket, request);
+            // now we will receive respose from nodes , read it 
+            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            String socketResponse = reader.readLine();
+            response = objectMapper.readValue(socketResponse, InstallSnapshotResponse.class);
+            LOGGER.info("term {} node id {} read from socket {} and request {} ", currentTerm, nodeId, socket, request);
+            return response;
+
+        }catch(Exception e){
+            LOGGER.error("print stacktrace", e);
+
+            LOGGER.info("term {} node id {} leader is {} and follower is {} request is {} ", currentTerm, nodeId, nodeId, followerId, request);
             LOGGER.info("Exception in sendAppendEntriesToPeerInParallel", e);
         }
         return response;

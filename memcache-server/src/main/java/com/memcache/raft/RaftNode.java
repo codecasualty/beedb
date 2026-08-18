@@ -22,6 +22,8 @@ import com.memcache.cache.Cache;
 import com.memcache.command.Command;
 import com.memcache.raft.rpc.AppendEntriesRequest;
 import com.memcache.raft.rpc.AppendEntriesResponse;
+import com.memcache.raft.rpc.InstallSnapshotRequest;
+import com.memcache.raft.rpc.InstallSnapshotResponse;
 import com.memcache.raft.rpc.RequestVoteRequest;
 import com.memcache.raft.rpc.RequestVoteResponse;
 import com.memcache.raft.wal.EntryType;
@@ -361,14 +363,47 @@ public class RaftNode{
         LOGGER.info("term {} node id {} replication loop for peer {} & current node is leader {} ", currentTerm, nodeId, peer, isLeader());
         while(isLeader()){
             
-            final AppendEntriesRequest request = getAppendEntriesRequest(peer);
-            if(!request.getEntries().isEmpty())
-                MDC.put("requestId", request.getEntry(0).getRequestId());
-            LOGGER.info("term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
-            AppendEntriesResponse response = transport.sendAppendEntriesToPeer(request , peer);
+            // making a decision to either send appendentries to peer or installsnapshot to peer
+            // and for making that decision we will use nextIndex of particualr peer
+            // if the nextindex which needs to be replicated/sent to peer is less than our last applied index (last applied 
+            // denotes the index of last entry up to which we have taken snapshot of our cache and compacted our wal and truncated our log)
+            // that means we have to send install snapsthot to peer
+            boolean nullResponse = false;
+            Object response = null;
+            if(peers.get(peer).getNextIndex() <= lastApplied){
+                final InstallSnapshotRequest request = getInstallSnapshotRequest(peer);
+                if(!request.getCacheState().isEmpty())
+                    MDC.put("requestId", request.getCacheState().keySet().iterator().next());
+                LOGGER.info("term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
+                response = transport.sendInstallSnapshotToPeer(request , peer);
+                if(response == null) nullResponse = true;
+                
+            }
+            else{
+                final AppendEntriesRequest request = getAppendEntriesRequest(peer);
+                if(!request.getEntries().isEmpty())
+                    MDC.put("requestId", request.getEntry(0).getRequestId());
+                LOGGER.info("term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
+                response = transport.sendAppendEntriesToPeer(request , peer);
+                if(response == null) nullResponse = true;
+                // we are adding sleep because , if we dont have anything else to replicate, withoout sleep we will continously overwhelm the system
+                // which will flood the system , also our while loop is tight spin , meaning it will keep on sending heartbeats/appendentries continously
+                if(((AppendEntriesResponse)response).isSuccess() && request.getEntries().isEmpty()){
+                    try{
+                        // sleep for 100 ms
+                        LOGGER.info("Response from peer{} was success but the request was no op Entry {} ", peer, request);
+                        LOGGER.info("Soo , Going in Sleeeeeeeepzzzzzzzzzzzzzz");
+                        Thread.sleep(100);
+                    }catch(InterruptedException e) {
+                        LOGGER.error("Inteerupted during sleep in replication loop for peer but response was received {} ", peer);
+    
+                    }
+                }
+            }
+
             // AppendEntriesResponse response = sendAppendEntriesToPeerInParallel(request , peer);
             LOGGER.info("term {} node id {} response from peer {} is -> {} ", currentTerm, nodeId, peer, response);
-            if(response == null){
+            if(nullResponse){
                 // if our response is null , try after some time , this is to avoid infinite loop
                 // in case of some network issue
                 try{
@@ -381,24 +416,12 @@ public class RaftNode{
 
                 }
                 continue;
-            } 
-            // we are adding sleep because , if we dont have anything else to replicate, withoout sleep we will continously overwhelm the system
-            // which will flood the system , also our while loop is tight spin , meaning it will keep on sending heartbeats/appendentries continously
-            if(response.isSuccess() && request.getEntries().isEmpty()){
-                try{
-                    // sleep for 100 ms
-                    LOGGER.info("Response from peer{} was success but the request was no op Entry {} ", peer, request);
-                    LOGGER.info("Soo , Going in Sleeeeeeeepzzzzzzzzzzzzzz");
-                    Thread.sleep(100);
-                }catch(InterruptedException e){
-                    LOGGER.error("Inteerupted during sleep in replication loop for peer but response was received {} ", peer);
-
-                }
-            }
+            }     
             
             synchronized(this){
-                if(response.getTerm() > currentTerm){
-                    stepDownDueToHigherTerm(response.getTerm());
+                int term = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getTerm() : ((InstallSnapshotResponse)response).getTerm();
+                if(term > currentTerm){
+                    stepDownDueToHigherTerm(term);
                     return;
                 }
                 updatePeerState(response , peer);
@@ -430,22 +453,6 @@ public class RaftNode{
         return noOp;
     }
 
-    // private void scheduleHeartbeat(){
-    //     // we need to send heartbeats to all peers
-    //     // send heratbeats every 50 ms
-    //     heartbeatTimeoutFuture = scheduler.scheduleAtFixedRate(() -> {
-    //         // start election
-    //         sendHeartbeats();
-    //     }, 0,50, TimeUnit.MILLISECONDS);
-    // }
-
-    // private void cancelHeartbeatTimer(){
-    //     if(heartbeatTimeoutFuture != null){
-    //         heartbeatTimeoutFuture.cancel(false);
-    //         heartbeatTimeoutFuture = null;
-    //     }
-    // }
-
     private synchronized AppendEntriesRequest getAppendEntriesRequest(String peer){
         int prevIndex = peers.get(peer).getNextIndex() - 1;
         int prevTerm = log.termAt(prevIndex);
@@ -453,16 +460,22 @@ public class RaftNode{
         // because leaderId can be null or stale values so its better touse nodeId
         return new AppendEntriesRequest(currentTerm , nodeId , prevIndex, prevTerm, commitIndex , list);
     }
+
+    private synchronized InstallSnapshotRequest getInstallSnapshotRequest(String peer){
+
+        return new InstallSnapshotRequest(currentTerm , nodeId , lastApplied, log.termAt(lastApplied), raftSnapshotManager.deserialize(nodeId).getCacheState());
+    }
+
     // its importatnt to use sychronized keyword in updatedpeerstate because if we dont use 
     // we may think that all we are doing is modifying result or entry of only the follower which is present in response, but we should not forget that 
     // our map (peers) is not concurrent map , that means, if multiple threads tries to read from it even though different entries or keys , it might misbehave
     // so its better to use concurrent map or use synchronized methods to avoid race conditions.
     // for example one thread trying to read some other entry in this updatepeerstate , but some other thread in some other method trying to read that same entry both can have
     // inconsistent info/result available which would be difficult to trace without proper synchronization mechanism
-    private synchronized void updatePeerState(AppendEntriesResponse response, String peer){
+    private synchronized void updatePeerState(Object response, String peer){
         String peerAddress = peer;
-        int nextMatchIndex = response.getMatchIndex();
-        boolean success  = response.isSuccess();
+        int nextMatchIndex = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getMatchIndex() : ((InstallSnapshotResponse)response).getAppliedIndex();
+        boolean success  = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).isSuccess() : ((InstallSnapshotResponse)response).isSuccess();
         PeerState state = peers.get(peerAddress);
         LOGGER.info("term {} and node id {} updating peer {} state {} ", currentTerm, nodeId, peer, state);
         LOGGER.info("term {} and node id {} match index {} next index {} success {} ", currentTerm, nodeId, state.getMatchIndex(), state.getNextIndex(), success);
@@ -647,6 +660,57 @@ public class RaftNode{
 
     }
 
+    // once we receive response from leader we have to 
+    // 1. if the term is current term which is ongoing
+    //    a. if term is higher then change our current term to what leader has sent and accept the snapshot
+    //    b. if term is lower, then ask leader to step down and wait for new election
+    // 2. once we have successfully parsed the snapshot, first of all take the snapshot of our current state , clear wal and log , change our 
+    //    current term , last applied index and commit index to what leader has sent and then restore the state of cache from snapshot  
+    //    the reason being, lets say we restored our snapstho and then tried to take snapstho and if it failes, it might happen that we have told our leader
+    //    that we have applied some index and our leader has committed to our client that entry is replicated and turns out our current node restart and now we are 
+    //    back to square one. 
+    public InstallSnapshotResponse handleInstallSnapshot(InstallSnapshotRequest request){
+        MDC.put("nodeId", nodeId);
+        InstallSnapshotResponse response = buildInstallSnapshotResponse();
+        synchronized(this){
+            if(request.getTerm() < currentTerm){
+                return response;
+            }
+            // now the node who is asking for votes has seen more term than us, it means it can be updated but we have to check that
+            if(request.getTerm() > currentTerm){
+                stepDownDueToHigherTerm(request.getTerm());
+                response.setTerm(request.getTerm());
+            }
+            cache.restoreState(request.getCacheState());
+            lastApplied = request.getLastIncludedIndex();
+            commitIndex = request.getLastIncludedIndex();
+            final Map<String, CacheItem> cacheState = cache.getState();
+            Map<String , String> saved = MDC.getCopyOfContextMap();
+            Thread.ofVirtual().start(() -> {
+                if(saved != null) MDC.setContextMap(saved);
+                boolean snapshotStatus = raftSnapshotManager.serialize(cacheState, lastApplied, currentTerm, nodeId);
+                synchronized(this){
+                    if(snapshotStatus == true){
+                        log = new RaftLog(lastApplied, request.getLastIncludedTerm());
+                        log.setLastIncludedIndex(lastApplied);
+                        log.setLastIncludedTerm(currentTerm);
+                    }
+                }
+            });
+        }
+
+        return response;
+    }
+
+    public InstallSnapshotResponse buildInstallSnapshotResponse(){
+        InstallSnapshotResponse response = new InstallSnapshotResponse();
+        response.setTerm(currentTerm);
+        response.setFollowerId(nodeId);
+        response.setAppliedIndex(lastApplied);
+        response.setSuccess(false);
+        return response;
+
+    }
     // this is called by server to write commands to cache
     // it basically returns a completeable future <string> beaus string is sreturn type of our commands and 
     // completable future because its async in nature, we want to ensure that our entry is replicated to majority of nodes, 

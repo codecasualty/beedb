@@ -15,6 +15,8 @@ import com.memcache.raft.rpc.AppendEntriesRequest;
 import com.memcache.raft.rpc.RequestVoteRequest;
 import com.memcache.raft.rpc.RequestVoteResponse;
 import com.memcache.raft.rpc.AppendEntriesResponse;
+import com.memcache.raft.rpc.InstallSnapshotRequest;
+import com.memcache.raft.rpc.InstallSnapshotResponse;
 
 // raftrpcserver is purely receiver side, it will be listening for requests from other nodes
 // and will be handling those requests
@@ -126,6 +128,12 @@ public class RaftRpcServer {
             AppendEntriesResponse response = raftNode.handleAppendEntries(requestAppendEntries);
             // once response is available we will have to convert it to json 
             // and send it back to other node
+            String responseString = objectMapper.writeValueAsString(response);
+            LOGGER.info("sending response to peer node {} : {}", socket.getInetAddress(), responseString);
+            sendResponse(socket, responseString);
+        }else if(rpcType.equals("INSTALL_SNAPSHOT")){
+            InstallSnapshotRequest installSnapshotRequest = objectMapper.treeToValue(payload, InstallSnapshotRequest.class);
+            InstallSnapshotResponse response = raftNode.handleInstallSnapshot(installSnapshotRequest);
             String responseString = objectMapper.writeValueAsString(response);
             LOGGER.info("sending response to peer node {} : {}", socket.getInetAddress(), responseString);
             sendResponse(socket, responseString);
