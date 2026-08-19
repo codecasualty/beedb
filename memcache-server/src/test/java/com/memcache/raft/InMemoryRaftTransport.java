@@ -4,6 +4,8 @@ import com.memcache.raft.rpc.AppendEntriesRequest;
 import com.memcache.raft.rpc.RequestVoteRequest;
 import com.memcache.raft.rpc.RequestVoteResponse;
 import com.memcache.raft.rpc.AppendEntriesResponse;
+import com.memcache.raft.rpc.InstallSnapshotRequest;
+import com.memcache.raft.rpc.InstallSnapshotResponse;
 
 import java.util.Map;
 import java.util.HashMap;
@@ -53,6 +55,20 @@ public class InMemoryRaftTransport implements RaftTransport {
         try{
             if(raftNode == null) return null;
             return raftNode.handleAppendEntries(request);
+        }finally{
+            if(saved != null) MDC.setContextMap(saved);
+            else MDC.clear();
+        }
+    }
+
+    @Override
+    public InstallSnapshotResponse sendInstallSnapshotToPeer(InstallSnapshotRequest request, String peer) {
+        Map<String , String> saved = MDC.getCopyOfContextMap();
+        LOGGER.info("Install Snapshot Req by node {} to peer{} request is {} ", request.getLeaderId() , peer, request);
+        RaftNode raftNode = raftNodes.get(peer);
+        try{
+            if(raftNode == null) return null;
+            return raftNode.handleInstallSnapshot(request);
         }finally{
             if(saved != null) MDC.setContextMap(saved);
             else MDC.clear();

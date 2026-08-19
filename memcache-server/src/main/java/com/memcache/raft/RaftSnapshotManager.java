@@ -48,7 +48,7 @@ public class RaftSnapshotManager {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private       String       SNAPSHOT_DIR = "snapshots";
     private       String       TMP_DIR      = "tmp";
-
+    private       String       SNAPSHOT_FILE_PATH = "snapshot.snap";
     public RaftSnapshotManager(String snapshotDir, String tmpDir){
         this.SNAPSHOT_DIR = snapshotDir;
         this.TMP_DIR = tmpDir;
@@ -78,7 +78,12 @@ public class RaftSnapshotManager {
             fos.getFD().sync();
 
             try{
+                LOGGER.info("moving file from {} to {}", tempFilePath, destFilepath);
+                LOGGER.info("snapshotted data is {} ", json);
                 Files.move(Path.of(tempFilePath), Path.of(destFilepath), StandardCopyOption.ATOMIC_MOVE);
+                // /tmp/junit1685153358943795016/snapshots/node2/snapshot.snap 
+                LOGGER.info("snapshotting is done successfully and destFile path is {}", destFilepath);
+                SNAPSHOT_FILE_PATH = destFilepath;
                 return true;
             }catch(IOException e){
                 // here we can get IOexception if the dest file path and temp file path are of different FS.
@@ -109,9 +114,11 @@ public class RaftSnapshotManager {
 
     public RaftSnapshot deserialize(String nodeId){
         // for deserilizing we will read the snapshot file and then use object mapper to convert it to our raftsnapshot
-        String destPath = "snapshots/"+nodeId+"/snapshot.snap";
+        String destPath = getDestPath(nodeId);
+        LOGGER.info("Deserialization in progresss from file {}", destPath);
         RaftSnapshot raftSnapShot = null;
         boolean isPresent = Files.isReadable(Path.of(destPath));
+        LOGGER.info("snpastho is present {}", isPresent);
         if(!isPresent) return null;
         File file  = new File(destPath);
         try{
@@ -119,7 +126,12 @@ public class RaftSnapshotManager {
         }catch(Exception e){
             LOGGER.error("exception while reading snapshot , pleaes check stack trace ",e);
         }
+        LOGGER.info("raft snapshot is {} ", raftSnapShot);
         return raftSnapShot;
+    }
+
+    private String getDestPath(String nodeId){
+        return SNAPSHOT_FILE_PATH;
     }
 
 }

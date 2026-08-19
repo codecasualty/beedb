@@ -327,7 +327,7 @@ public class RaftClusterTest {
         // will now push some entries in our funcitonal cluster
         // and wait for them to get replicated
         List<CompletableFuture<String>> futures = new ArrayList<>();
-        for(int i = 0;i < 10;i++){
+        for(int i = 1;i <= 10;i++){
             Command command = new Command(CommandType.SET, "key"+i, 0, 0, 6);
             command.setValue(("value"+i).getBytes());
             CompletableFuture<String> result = leader.propose(command.serialize());
@@ -336,7 +336,7 @@ public class RaftClusterTest {
 
         for(CompletableFuture<String> future : futures){
             try {
-                String response = future.get(500 , TimeUnit.MILLISECONDS);
+                String response = future.get(5 , TimeUnit.SECONDS);
                 assertEquals("STORED\r\n", response);
             } catch (Exception e) {
                 LOGGER.info("entry is not committed in leader, waiting for majority");
@@ -349,12 +349,16 @@ public class RaftClusterTest {
 
         // now we will wait for 5000 ms because we hvae pushed 10 entires , so those entries should get replicated to follower and we dont want to 
         // query that node , because it may still be catching up with the leader. so we are waiting generously 
-        LOGGER.info("waiting for 1 seconds before querying follower node {} ", nodeToRemove.getNodeId());
-        Thread.sleep(1000);
+        // the reason we have such big sleep is , because there will be exchange of two snapshots and few entries as well and we dont want to query follower
+        // too early
+        LOGGER.info("waiting for 5 seconds before querying follower node {} ", nodeToRemove.getNodeId());
+        Thread.sleep(5000);
 
-        for(int i = 9;i >= 0 ;i--){
+        for(int i = 10;i >= 1 ;i--){
             CacheItem item = nodeToRemove.get("key"+i);
-            LOGGER.info("asking follower {} for {} ",nodeToRemove.getNodeId(), "key"+i);
+            CacheItem leaderItem = leader.get("key"+i);
+            LOGGER.info("asking leader {} for {} and value is {} ",leader.getNodeId(), "key"+i, new String(leaderItem.getValue()));
+            LOGGER.info("asking follower {} for {} and value is {} ",nodeToRemove.getNodeId(), "key"+i, new String(item.getValue()));
             assertNotNull(item);
             String value = new String(item.getValue());
             LOGGER.info("vlaue stored at follower is {}", value);
