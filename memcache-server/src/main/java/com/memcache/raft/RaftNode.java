@@ -373,7 +373,7 @@ public class RaftNode{
             // that means we have to send install snapsthot to peer
             boolean nullResponse = false;
             Object response = null;
-            if(peers.get(peer).getNextIndex() <= lastApplied){
+            if(peers.get(peer).getNextIndex() <= log.getLastIncludedIndex()){
                 final InstallSnapshotRequest request = getInstallSnapshotRequest(peer);
                 if(!request.getCacheState().isEmpty())
                     MDC.put("requestId", request.getCacheState().keySet().iterator().next());
@@ -486,7 +486,7 @@ public class RaftNode{
         LOGGER.info("term {} and node id {} response {} ", currentTerm, nodeId, response);
         state.setMatchIndex(nextMatchIndex);
         if(success) state.setNextIndex(state.getMatchIndex() + 1);
-        else if(state.getNextIndex() > 1 ) state.setNextIndex(state.getNextIndex() - 1);
+        else if(state.getNextIndex() > 1 ) state.setNextIndex(state.getMatchIndex() + 1);
 
     }
     // this method shouldn't be synchronized because we are using virtual threads to replicate the log and we dont want to block the main thread
