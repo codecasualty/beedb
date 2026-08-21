@@ -14,12 +14,12 @@ public class AppendEntriesResponse {
     @param matchIndex : index which is confirmed replicated in peers log, not necessary to be applied in state machine.
      */
     private boolean success;
-    private int     term;
+    private long     term;
     private String  followerId;
     private int     matchIndex;
 
     @JsonCreator
-    public AppendEntriesResponse(@JsonProperty("success") boolean success,@JsonProperty("term") int term,@JsonProperty("followerId") String followerId,@JsonProperty("matchIndex") int matchIndex) {
+    public AppendEntriesResponse(@JsonProperty("success") boolean success,@JsonProperty("term") long term,@JsonProperty("followerId") String followerId,@JsonProperty("matchIndex") int matchIndex) {
         this.success = success;
         this.term = term;
         this.followerId = followerId;
@@ -37,11 +37,11 @@ public class AppendEntriesResponse {
         this.success = success;
     }
 
-    public int getTerm() {
+    public long getTerm() {
         return term;
     }
 
-    public void setTerm(int term) {
+    public void setTerm(long term) {
         this.term = term;
     }
 

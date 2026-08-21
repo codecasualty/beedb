@@ -323,7 +323,7 @@ public class RaftClusterTest {
         // removing that node from our transport , not killing not calling stop
         String addressNodeToRemoveString = raftNodeAddress.get(nodeToRemove);
         raftTransport.removeRaftNode(addressNodeToRemoveString);
-
+        raftNodeAddress.remove(nodeToRemove);
         // will now push some entries in our funcitonal cluster
         // and wait for them to get replicated
         List<CompletableFuture<String>> futures = new ArrayList<>();
@@ -336,7 +336,7 @@ public class RaftClusterTest {
 
         for(CompletableFuture<String> future : futures){
             try {
-                String response = future.get(5 , TimeUnit.SECONDS);
+                String response = future.get(500 , TimeUnit.MILLISECONDS);
                 assertEquals("STORED\r\n", response);
             } catch (Exception e) {
                 LOGGER.info("entry is not committed in leader, waiting for majority");
@@ -346,7 +346,7 @@ public class RaftClusterTest {
 
         // now we bring back our follower, which was thrown out of cluster
         raftTransport.addRaftNode(addressNodeToRemoveString , nodeToRemove );
-
+        raftNodeAddress.put(nodeToRemove , addressNodeToRemoveString);
         // now we will wait for 5000 ms because we hvae pushed 10 entires , so those entries should get replicated to follower and we dont want to 
         // query that node , because it may still be catching up with the leader. so we are waiting generously 
         // the reason we have such big sleep is , because there will be exchange of two snapshots and few entries as well and we dont want to query follower
@@ -375,7 +375,7 @@ public class RaftClusterTest {
         // our complete foundation of leader based replication fails
 
         RaftNode leader = findLeader();
-        int leaderTerm = leader.getTerm();
+        long leaderTerm = leader.getTerm();
         String leaderAddress = raftNodeAddress.get(leader);
         // nowe we will kill the leadernode
 
@@ -390,7 +390,7 @@ public class RaftClusterTest {
         RaftNode newLeader = findLeader();
         assertNotNull(newLeader);
 
-        int newTerm = newLeader.getTerm();
+        long newTerm = newLeader.getTerm();
 
         assertTrue( "Expected newterm "+newTerm+" to be greater than previous term "+leaderTerm , newTerm > leaderTerm );
 

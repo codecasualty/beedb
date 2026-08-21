@@ -54,7 +54,7 @@ public class RaftSnapshotManager {
         this.TMP_DIR = tmpDir;
     }
 
-    public boolean serialize(Map<String,CacheItem> cacheState, int lastIncludedIndex, int lastIncludedTerm, String nodeId){
+    public boolean serialize(Map<String,CacheItem> cacheState, int lastIncludedIndex, long lastIncludedTerm, String nodeId){
         String tempFolderPath = TMP_DIR+"/"+nodeId;
         String destFolderPath = SNAPSHOT_DIR+"/"+nodeId;
         String tempFilePath = tempFolderPath+"/snapshot.tmp";
@@ -71,12 +71,12 @@ public class RaftSnapshotManager {
             OutputStreamWriter osw = new OutputStreamWriter(fos, StandardCharsets.UTF_8);
             BufferedWriter bw = new BufferedWriter(osw);
         ){
-            
+            LOGGER.info("we have opened files at {} and {} ", tempFilePath, destFilepath);
             String json = objectMapper.writeValueAsString(snapshot);
             bw.write(json);
             bw.flush();
             fos.getFD().sync();
-
+            LOGGER.info("we have written json to file at {} ", tempFilePath);
             try{
                 LOGGER.info("moving file from {} to {}", tempFilePath, destFilepath);
                 LOGGER.info("snapshotted data is {} ", json);
@@ -93,7 +93,7 @@ public class RaftSnapshotManager {
         }catch (Exception e) {
             LOGGER.error("snapshotting process failed please look at stack trace",e);
         }
-
+        LOGGER.info("returning after serailizing process ");
         return false;
     }
 

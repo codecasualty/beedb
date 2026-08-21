@@ -9,16 +9,16 @@ this class denotes the append entry request send by leader to follower
  */
 public class AppendEntriesRequest {
     
-    private int         term;
+    private long         term;
     private String      leaderId;
     private int         prevLogIndex;
-    private int         prevLogTerm;
+    private long         prevLogTerm;
     private int         leaderCommit;
     private List<LogEntry> entries;
     
     @JsonCreator
-    public AppendEntriesRequest(@JsonProperty("term") int term, @JsonProperty("leaderId") String leaderId,
-    @JsonProperty("prevLogIndex") int prevLogIndex, @JsonProperty("prevLogTerm") int prevLogTerm, 
+    public AppendEntriesRequest(@JsonProperty("term") long term, @JsonProperty("leaderId") String leaderId,
+    @JsonProperty("prevLogIndex") int prevLogIndex, @JsonProperty("prevLogTerm") long prevLogTerm, 
     @JsonProperty("leaderCommit") int leaderCommit, @JsonProperty("entries") List<LogEntry> entries) {
         this.term = term;
         this.leaderId = leaderId;
@@ -31,11 +31,11 @@ public class AppendEntriesRequest {
     public AppendEntriesRequest() {
     }
 
-    public int getTerm() {
+    public long getTerm() {
         return term;
     }
 
-    public void setTerm(int term) {
+    public void setTerm(long term) {
         this.term = term;
     }
 
@@ -55,7 +55,7 @@ public class AppendEntriesRequest {
         this.prevLogIndex = prevLogIndex;
     }
 
-    public int getPrevLogTerm() {
+    public long getPrevLogTerm() {
         return prevLogTerm;
     }
 

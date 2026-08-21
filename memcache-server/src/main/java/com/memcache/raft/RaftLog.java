@@ -11,7 +11,7 @@ public class RaftLog {
     private Logger LOGGER = LoggerFactory.getLogger(RaftLog.class.getName());
     // these two vars denote, how many entries and for which term we have snapshotted
     private int lastIncludedIndex;
-    private int lastIncludedTerm;
+    private long lastIncludedTerm;
 
     public RaftLog(List<LogEntry> log) {
         this.logEntries = log;
@@ -23,15 +23,17 @@ public class RaftLog {
         logEntries.add(new LogEntry(0, null, 0, true, null ));
     }
 
-    public RaftLog(int lastIncludedIndex , int lastIncludedTerm){
+    public RaftLog(int lastIncludedIndex , long lastIncludedTerm){
         logEntries = new ArrayList<LogEntry>();
+        this.lastIncludedIndex = lastIncludedIndex;
+        this.lastIncludedTerm = lastIncludedTerm;
         logEntries.add(new LogEntry(lastIncludedIndex, null, lastIncludedTerm, true, null));
     }
     public int lastIndex(){
         return logEntries.get(logEntries.size() - 1).getIndex();
     }
 
-    public int lastTerm(){
+    public long lastTerm(){
         return logEntries.get(logEntries.size() - 1).getTerm();
     }
 
@@ -47,10 +49,10 @@ public class RaftLog {
     }
 
     // this is for vote restriction , we want to make sure that we are electing the competent leader
-    public boolean isUpToDate(int index, int term){
-        LOGGER.info("index {} term {} & current lastindex {} lastterm {} ", index, term, lastIndex(), lastTerm());
+    public boolean isUpToDate(int index, long term){
+        LOGGER.info("request node index {} term {} & current node lastindex {} lastterm {} ", index, term, lastIndex(), lastTerm());
         LogEntry lastLog = logEntries.get(logEntries.size() - 1);
-        int currentTerm = lastLog.getTerm();
+        long currentTerm = lastLog.getTerm();
         int currentIndex = lastLog.getIndex();
         if(currentTerm < term) return true;
         else if(currentTerm > term) return false;
@@ -61,7 +63,8 @@ public class RaftLog {
     // this is for checking if we are accepting this append entry from leader or not ,
     // we want to make sure that we are not accepting stale/wrong entries, if leader sends some entry at particular index
     // and lets say we have entry at that index and its not the same as what leader is sending then we will reject that entry
-    public boolean hasMatchAt(int index, int term){
+    public boolean hasMatchAt(int index, long term){
+        LOGGER.info("last included index {} last included term {} index {} term {}", lastIncludedIndex, lastIncludedTerm, index, term);
         // let say we have take snapshot of entries till lastincluded index that means those entries after taking snapshot
         // must've been removed from log , so we can compare them and if we have take snapshot there is no need to compare them as we
         // already have it
@@ -82,7 +85,7 @@ public class RaftLog {
         return logEntries.get(index - lastIncludedIndex);
     }
 
-    public int termAt(int index){
+    public long termAt(int index){
         return logEntries.get(index - lastIncludedIndex).getTerm();
     }
 
@@ -94,12 +97,13 @@ public class RaftLog {
         this.lastIncludedIndex = index;
     }
 
-    public void setLastIncludedTerm(int term){
+    public void setLastIncludedTerm(long term){
         this.lastIncludedTerm = term;
     }
 
     public boolean compactTill(int index){
         logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex , logEntries.size()));
+        LOGGER.info("after compaction log entries are {}", logEntries);
         return true;
     }
 
@@ -115,7 +119,19 @@ public class RaftLog {
         return lastIncludedIndex;
     }
 
-    public int getLastIncludedTerm(){
+    public long getLastIncludedTerm(){
         return lastIncludedTerm;
+    }
+
+    public void remove(int index){
+        logEntries.remove(index);
+    }
+
+    public String toString(){
+        return "RaftLog{" +
+                "logEntries=" + logEntries +
+                ", lastIncludedIndex=" + lastIncludedIndex +
+                ", lastIncludedTerm=" + lastIncludedTerm +
+                '}';
     }
 }

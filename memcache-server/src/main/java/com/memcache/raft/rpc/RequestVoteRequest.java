@@ -15,28 +15,30 @@ public class RequestVoteRequest {
     @param candidateId : id of the candidate
     lastlogIndex and lastLogTerm are used to find the most recent/updated leader 
      */
-    private int     term;
+    private long     term;
     private int     lastLogIndex;
-    private int     lastLogTerm;
+    private long     lastLogTerm;
     private String  candidateId;
+    private String  requestId;
 
     @JsonCreator
-    public RequestVoteRequest(@JsonProperty("term") int term, @JsonProperty("lastLogIndex") int lastLogIndex,
-    @JsonProperty("lastLogTerm") int lastLogTerm, @JsonProperty("candidateId") String candidateId) {
+    public RequestVoteRequest(@JsonProperty("term") long term, @JsonProperty("lastLogIndex") int lastLogIndex,
+    @JsonProperty("lastLogTerm") long lastLogTerm, @JsonProperty("candidateId") String candidateId , @JsonProperty String requestId) {
         this.term = term;
         this.lastLogIndex = lastLogIndex;
         this.lastLogTerm = lastLogTerm;
         this.candidateId = candidateId;
+        this.requestId = requestId;
     }
 
     public RequestVoteRequest() {
     }
 
-    public int getTerm() {
+    public long getTerm() {
         return term;
     }
 
-    public void setTerm(int term) {
+    public void setTerm(long term) {
         this.term = term;
     }
 
@@ -48,7 +50,7 @@ public class RequestVoteRequest {
         this.lastLogIndex = lastLogIndex;
     }
 
-    public int getLastLogTerm() {
+    public long getLastLogTerm() {
         return lastLogTerm;
     }
 
@@ -64,8 +66,13 @@ public class RequestVoteRequest {
         this.candidateId = candidateId;
     }
 
+    public String getRequestId() {
+        return requestId;
+    }
+
     public String toString(){
-        return "RequestVoteRequest{" +
+        return "RequestVoteRequest{" + 
+                "requestId "+ requestId +
                 "term=" + term +
                 ", lastLogIndex=" + lastLogIndex +
                 ", lastLogTerm=" + lastLogTerm +

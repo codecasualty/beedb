@@ -37,7 +37,7 @@ import org.slf4j.MDC;
 public class RaftNode{
     
     // persistent fields
-    private int      currentTerm;
+    private long      currentTerm;
     private String      votedFor;
     private RaftLog  log;
 
@@ -117,7 +117,7 @@ public class RaftNode{
         }
         if(raftSnapShot != null){
             lastApplied = commitIndex = raftSnapShot.getLastAppliedIndex();
-            int lastIncludedTerm = raftSnapShot.getLastAppliedTerm();
+            long lastIncludedTerm = raftSnapShot.getLastAppliedTerm();
             this.log = new RaftLog(lastApplied, lastIncludedTerm);
             log.setLastIncludedIndex(lastApplied);
             log.setLastIncludedTerm(lastIncludedTerm);
@@ -197,6 +197,7 @@ public class RaftNode{
     // so we dont want to block the main thread
     private int requestVoteFromPeers(){
         int votes = 1;
+        MDC.put("nodeId" , nodeId);
         RequestVoteRequest request = null;
         if(!isCandidate()) return 0;
         synchronized(this){
@@ -219,6 +220,7 @@ public class RaftNode{
     }
 
     private List<RequestVoteResponse> sendVotesRequestInParallel(RequestVoteRequest request){
+        MDC.put("requestId", request.getRequestId());
         // any exception throws by sendRequestVoteToPeer will be caught by exception handler , they are stored in future and unwrapped at future.get()
         // and then caught by catch block so no issues over here.
         List<Future<RequestVoteResponse>> futures = peerAddresses.stream()
@@ -243,7 +245,7 @@ public class RaftNode{
     
     // this method is not synchronized because its called from 
     // requestVoteFromPeers , replicationLoopForPeer,handleRequestVote , handleAppendEntries which are either synchronized or calls from synchronized blocks
-    private void stepDownDueToHigherTerm(int term){
+    private void stepDownDueToHigherTerm(long term){
         LOGGER.info("term {} node id {} stepping down due to higher term {} ", currentTerm, nodeId, term);
         currentTerm = term;
         votedFor = null;
@@ -254,8 +256,10 @@ public class RaftNode{
         // cancelHeartbeatTimer();
     }
     private RequestVoteRequest buildReqestVoteRequest(){
-        LOGGER.info("term {} node id {} log.lastIndex {} log.lastTerm {} ", currentTerm, nodeId, log.lastIndex(), log.lastTerm());
-        return new RequestVoteRequest(currentTerm, log.lastIndex(), log.lastTerm(), nodeId);
+        String requestId = UUID.randomUUID().toString();
+        MDC.put("requestId", requestId);
+        LOGGER.info("term {} node id {} log.lastIndex {} log.lastTerm {} requestId {} ", currentTerm, nodeId, log.lastIndex(), log.lastTerm(), requestId);
+        return new RequestVoteRequest(currentTerm, log.lastIndex(), log.lastTerm(), nodeId, requestId);
     }
 
     private <T> Callable<T> wrapCallableWithMdc(Callable<T> callable){
@@ -363,6 +367,7 @@ public class RaftNode{
         // we will increase the sleep time by a factor of 2 and max it by 1000 ms
         // for now its 200 ms
         int networkFailureSleepTime = 200;
+        MDC.put("nodeId", nodeId);
         LOGGER.info("term {} node id {} replication loop for peer {} & current node is leader {} ", currentTerm, nodeId, peer, isLeader());
         while(isLeader()){
             
@@ -375,10 +380,10 @@ public class RaftNode{
             Object response = null;
             if(peers.get(peer).getNextIndex() <= log.getLastIncludedIndex()){
                 final InstallSnapshotRequest request = getInstallSnapshotRequest(peer);
-                if(!request.getCacheState().isEmpty())
-                    MDC.put("requestId", request.getCacheState().keySet().iterator().next());
+                MDC.put("requestId", request.getRequestId());
                 LOGGER.info("install snapshot :- term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
                 response = transport.sendInstallSnapshotToPeer(request , peer);
+                LOGGER.info("Received install snapshot response {} ", response);
                 if(response == null) nullResponse = true;
                 
             }
@@ -422,7 +427,7 @@ public class RaftNode{
             }     
             
             synchronized(this){
-                int term = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getTerm() : ((InstallSnapshotResponse)response).getTerm();
+                long term = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getTerm() : ((InstallSnapshotResponse)response).getTerm();
                 if(term > currentTerm){
                     stepDownDueToHigherTerm(term);
                     return;
@@ -452,13 +457,13 @@ public class RaftNode{
     }   
 
     private LogEntry getNoOpEntry(){
-        LogEntry noOp = new LogEntry(log.lastIndex() + 1, null , currentTerm ,true, null);
+        LogEntry noOp = new LogEntry(log.lastIndex() + 1, null , currentTerm ,true, UUID.randomUUID().toString());
         return noOp;
     }
 
     private synchronized AppendEntriesRequest getAppendEntriesRequest(String peer){
         int prevIndex = peers.get(peer).getNextIndex() - 1;
-        int prevTerm = log.termAt(prevIndex);
+        long prevTerm = log.termAt(prevIndex);
         List<LogEntry> list = log.getFrom(prevIndex + 1);
         // because leaderId can be null or stale values so its better touse nodeId
         return new AppendEntriesRequest(currentTerm , nodeId , prevIndex, prevTerm, commitIndex , list);
@@ -466,8 +471,11 @@ public class RaftNode{
 
     private synchronized InstallSnapshotRequest getInstallSnapshotRequest(String peer){
         RaftSnapshot raftSnapshot = raftSnapshotManager.deserialize(nodeId);
+        String requestId = UUID.randomUUID().toString();
+        MDC.put("requestId", requestId);
         LOGGER.info("current term is {} node Id {} , role {} , lastApplied {} current index {} ", currentTerm, nodeId, getRole(), lastApplied, log.lastIndex());
-        return new InstallSnapshotRequest(currentTerm , nodeId , raftSnapshot.getLastAppliedIndex(), raftSnapshot.getLastAppliedTerm(), raftSnapshot.getCacheState());
+        LOGGER.info("lastApplied in raft snapshot {} last term in raft  {} cache state {} ", raftSnapshot.getLastAppliedIndex(), raftSnapshot.getLastAppliedTerm(), raftSnapshot.getCacheState());
+        return new InstallSnapshotRequest(currentTerm , nodeId , raftSnapshot.getLastAppliedIndex(), raftSnapshot.getLastAppliedTerm(), raftSnapshot.getCacheState(), requestId);
     }
 
     // its importatnt to use sychronized keyword in updatedpeerstate because if we dont use 
@@ -484,7 +492,7 @@ public class RaftNode{
         LOGGER.info("term {} and node id {} updating peer {} state {} ", currentTerm, nodeId, peer, state);
         LOGGER.info("term {} and node id {} match index {} next index {} success {} ", currentTerm, nodeId, state.getMatchIndex(), state.getNextIndex(), success);
         LOGGER.info("term {} and node id {} response {} ", currentTerm, nodeId, response);
-        state.setMatchIndex(nextMatchIndex);
+        if(nextMatchIndex > state.getMatchIndex()) state.setMatchIndex(nextMatchIndex);
         if(success) state.setNextIndex(state.getMatchIndex() + 1);
         else if(state.getNextIndex() > 1 ) state.setNextIndex(state.getMatchIndex() + 1);
 
@@ -583,6 +591,7 @@ public class RaftNode{
                 resetElectionTimer();
                 // whether the node which is asking for appending entry has updated log 
                 if(!log.hasMatchAt(request.getPrevLogIndex() , request.getPrevLogTerm())){
+                    LOGGER.debug("i guess we are returnig from here");
                     response.setSuccess(false);
                     return response;
                 }
@@ -601,7 +610,7 @@ public class RaftNode{
                     LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
                         "while appending entry to wal , please check stack trace ", e);
                     MDC.remove("requestId");
-                    System.exit(1);
+                    return response;
                 }
             }
             
@@ -623,7 +632,7 @@ public class RaftNode{
                     LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
                         "while appending entry to wal , please check stack trace ", e);
                     MDC.remove("requestId");
-                    System.exit(1);
+                    return response;
                 }
             }
             synchronized(this){
@@ -675,6 +684,7 @@ public class RaftNode{
     //    back to square one. 
     public InstallSnapshotResponse handleInstallSnapshot(InstallSnapshotRequest request){
         MDC.put("nodeId", nodeId);
+        MDC.put("requestId", request.getRequestId());
         LOGGER.info("Install snapshot request is {} ", request);
         InstallSnapshotResponse response = buildInstallSnapshotResponse();
         synchronized(this){
@@ -689,29 +699,35 @@ public class RaftNode{
             }
             final Map<String, CacheItem> cacheState = request.getCacheState();
             Map<String , String> saved = MDC.getCopyOfContextMap();
-            Thread.ofVirtual().start(() -> {
+            // Thread.ofVirtual().start(() -> {
                 if(saved != null) MDC.setContextMap(saved);
                 LOGGER.info("lastApplied is {} and request.getLastIncludedIndex() is {} lastIncludedTerm is {} nodeId is {} ", lastApplied, request.getLastIncludedIndex(), request.getLastIncludedTerm(), nodeId);
                 LOGGER.info("cache state is {} ", cacheState);
                 boolean snapshotStatus = raftSnapshotManager.serialize(cacheState, request.getLastIncludedIndex(), request.getLastIncludedTerm(), nodeId);
+                LOGGER.info("before entering snapshot status is {} ", snapshotStatus);
                 synchronized(this){
                     LOGGER.info("snapshot status is {} ", snapshotStatus);
                     if(snapshotStatus == true){
-                        log = new RaftLog(lastApplied, request.getLastIncludedTerm());
-                        log.setLastIncludedIndex(lastApplied);
-                        log.setLastIncludedTerm(currentTerm);
+                        log = new RaftLog(request.getLastIncludedIndex(), request.getLastIncludedTerm());
+                        log.setLastIncludedIndex(request.getLastIncludedIndex());
+                        log.setLastIncludedTerm(request.getLastIncludedTerm());
                         cache.restoreState(request.getCacheState());
                         lastApplied = request.getLastIncludedIndex();
                         commitIndex = request.getLastIncludedIndex();
+                        // last applied means how many we have applied to our cache , from our logs , but this is cache restoration , 
+                        // we havent  applied from our logs, so increasing last applied would be wrong, 
                         LOGGER.info("lastApplied is {} and commitIndex is {} ", lastApplied, commitIndex);
-                        response.setAppliedIndex(lastApplied);
+                        // below applied index means they are successfully applied to cache, it has nothing to do with our raft logs size.
+                        response.setAppliedIndex(request.getLastIncludedIndex());
                         response.setTerm(currentTerm);
                         response.setSuccess(true);
 
                     }
                 }
-            });
+            // });
         }
+        LOGGER.info("sending install snapsthot response {} ", response);
+        
 
         return response;
     }
@@ -772,8 +788,10 @@ public class RaftNode{
                 try{
                     walfuture.get(5 , TimeUnit.SECONDS);
                 }catch(Exception e){
+                    log.remove(log.size() - 1);
                     LOGGER.error("Couldn't append entry to log :( , please check stack trace ", e);
-                    System.exit(1);
+                    future.completeExceptionally(e);
+                    return future;
                 }
             }
         }finally{
@@ -806,7 +824,7 @@ public class RaftNode{
                     // it shouldn't affect our snapshot.
                     inProgress = true;
                     final int snapShotApplied = lastApplied;
-                    final int snapShotTerm = log.termAt(snapShotApplied);
+                    final long snapShotTerm = log.termAt(snapShotApplied);
                     final Map<String, CacheItem> cacheState = cache.getState();
                     LOGGER.info("lastApplied is {} and snapShotApplied is {} ", lastApplied, snapShotApplied);
                     LOGGER.info("cache state is {} ", cacheState);
@@ -917,7 +935,7 @@ public class RaftNode{
         applyExecutor.shutdownNow();
     }
 
-    public synchronized int getTerm(){
+    public synchronized long getTerm(){
         return currentTerm;
     }   
 

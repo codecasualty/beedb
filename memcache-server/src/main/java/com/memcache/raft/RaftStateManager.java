@@ -34,7 +34,7 @@ public class RaftStateManager {
         this.TMP_DIR = tmpDir;
     }
 
-    public boolean serialize(int currentTerm , String votedFor, String nodeId){
+    public boolean serialize(long currentTerm , String votedFor, String nodeId){
         String tempFolderPath = TMP_DIR+"/"+nodeId;
         String destFolderPath = STATE_DIR+"/"+nodeId;
         String tempFilePath = tempFolderPath+"/state.tmp";

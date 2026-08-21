@@ -204,6 +204,7 @@ public class WalService {
             LOGGER.info("printing temp file channel after all entries are written");
             print(tempFileChannel);
             tempFileChannel.force(true);
+            tempFileChannel.close();
             // Thread.sleep(100);
             // FileChannel duplicateFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.READ, StandardOpenOption.WRITE);
             // LOGGER.info("printing duplicate file channel after temp file is forced");
@@ -219,16 +220,17 @@ public class WalService {
             // therefore we will start writing from the end of the file
             walFileChannel.position(walFileChannel.size());
         }catch(Exception e){
-            e.printStackTrace();
+            // e.printStackTrace();
+            throw new RuntimeException(e);
         }
         
-        try{
-            LOGGER.info("checking what is stoerd in filechannel after compaction ");
-            print(FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ));
+        // try{
+        //     LOGGER.info("checking what is stoerd in filechannel after compaction ");
+        //     print(FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ));
 
-        }catch(Exception e){
-            e.printStackTrace();
-        }
+        // }catch(Exception e){
+        //     e.printStackTrace();
+        // }
         // we have to reopen our actual file channel 
     }
     
@@ -369,8 +371,8 @@ public class WalService {
             // LOGGER.info("position/end pointer is {} ", walFileChannel.position());
             // LOGGER.info("size of file is {} ", walFileChannel.size());
         }catch(Exception e){
-            e.printStackTrace();
-            truncate(recordStart);
+            // e.printStackTrace();
+            throw new RuntimeException(e);
         }
         goodSegmentEnd = -1;
         LOGGER.info("----------------------------  wal size is {} ", raftlog.size());
@@ -386,7 +388,8 @@ public class WalService {
             walFileChannel.truncate(index);
             walFileChannel.position(index);
         }catch(Exception e){
-            e.printStackTrace();
+            // e.printStackTrace();
+            throw new RuntimeException(e);
         }
     }
 
@@ -414,7 +417,11 @@ public class WalService {
     }
     
     public void shutdown(){
-        if(walQueue != null) walQueue.clear();
+        if(walQueue != null){
+            for(PendingWrite pending : walQueue){
+                pending.future.completeExceptionally(new RuntimeException("Wal service is shutting down"));
+            }
+        } 
         if(executorService != null) executorService.shutdownNow();
         if(walFileChannel != null){
             try{

@@ -6,14 +6,14 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class InstallSnapshotResponse {
     
-    private int term;
+    private long term;
     private String followerId;
     private int    appliedIndex;
     private boolean success; 
 
     @JsonCreator
     public InstallSnapshotResponse(
-        @JsonProperty("term") int term,
+        @JsonProperty("term") long term,
         @JsonProperty("followerId") String followerId,
         @JsonProperty("appliedIndex") int appliedIndex,
         @JsonProperty("success") boolean success
@@ -27,7 +27,7 @@ public class InstallSnapshotResponse {
     public InstallSnapshotResponse() {
     }
 
-    public int getTerm() {
+    public long getTerm() {
         return term;
     }
 
@@ -51,7 +51,7 @@ public class InstallSnapshotResponse {
         this.success = success;
     }
 
-    public void setTerm(int term) {
+    public void setTerm(long term) {
         this.term = term;
     }
 

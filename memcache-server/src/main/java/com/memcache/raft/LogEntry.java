@@ -15,11 +15,11 @@ public class LogEntry {
      */
     private final int     index;
     private final String  command;
-    private final int     term;
+    private final long     term;
     private final boolean noOp;
     private final String  requestId;
     @JsonCreator
-    public LogEntry(@JsonProperty("index") int index, @JsonProperty("command") String command, @JsonProperty("term") int term, @JsonProperty("noOp") boolean noOp , @JsonProperty("requestId") String requestId) {
+    public LogEntry(@JsonProperty("index") int index, @JsonProperty("command") String command, @JsonProperty("term") long term, @JsonProperty("noOp") boolean noOp , @JsonProperty("requestId") String requestId) {
         this.index = index;
         this.command = command;
         this.term = term;
@@ -36,7 +36,7 @@ public class LogEntry {
         return command;
     }
 
-    public int getTerm() {
+    public long getTerm() {
         return term;
     }
 

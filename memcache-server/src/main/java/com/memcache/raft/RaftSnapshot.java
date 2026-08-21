@@ -8,13 +8,13 @@ import com.memcache.cache.CacheItem;
 // this will be a simple DTO , which will store last applied index and last applied term along with snapshot
 public class RaftSnapshot {
     private final int                       lastAppliedIndex;
-    private final int                       lastAppliedTerm;
+    private final long                       lastAppliedTerm;
     private final Map<String, CacheItem>    cacheState;
 
     @JsonCreator
     public RaftSnapshot(
         @JsonProperty("lastAppliedIndex") int lastAppliedIndex,
-        @JsonProperty("lastAppliedTerm") int lastAppliedTerm,
+        @JsonProperty("lastAppliedTerm") long lastAppliedTerm,
         @JsonProperty("cacheState") Map<String, CacheItem> cacheState
     ){
         this.lastAppliedIndex = lastAppliedIndex;
@@ -27,7 +27,7 @@ public class RaftSnapshot {
     }
 
 
-    public int getLastAppliedTerm(){
+    public long getLastAppliedTerm(){
         return lastAppliedTerm;
     }
 

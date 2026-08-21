@@ -11,10 +11,10 @@ public class RequestVoteResponse {
     @param followerId : id of the follower
     */
     private String  followerId;
-    private int     term;
+    private long     term;
     private boolean voteGranted;
 
-    public RequestVoteResponse(String followerId, int term, boolean voteGranted) {
+    public RequestVoteResponse(String followerId, long term, boolean voteGranted) {
         this.followerId = followerId;
         this.term = term;
         this.voteGranted = voteGranted;
@@ -31,11 +31,11 @@ public class RequestVoteResponse {
         this.followerId = followerId;
     }
 
-    public int getTerm() {
+    public long getTerm() {
         return term;
     }
 
-    public void setTerm(int term) {
+    public void setTerm(long term) {
         this.term = term;
     }
 

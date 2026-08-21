@@ -27,7 +27,7 @@ public class SocketRaftTransport implements RaftTransport {
    
     @Override
     public RequestVoteResponse sendRequestVoteToPeer(RequestVoteRequest request, String peer) {
-        int currentTerm = request.getTerm();
+        long currentTerm = request.getTerm();
         String nodeId = request.getCandidateId();
         
 
@@ -66,7 +66,7 @@ public class SocketRaftTransport implements RaftTransport {
 
     @Override
     public AppendEntriesResponse sendAppendEntriesToPeer(AppendEntriesRequest request, String peer) {
-        int currentTerm = request.getTerm();
+        long currentTerm = request.getTerm();
         String nodeId = request.getLeaderId(); 
         // the node which is sending the append entries is leader
         String leaderId = nodeId;
@@ -108,7 +108,7 @@ public class SocketRaftTransport implements RaftTransport {
 
     @Override
     public InstallSnapshotResponse sendInstallSnapshotToPeer(InstallSnapshotRequest request, String peer) {
-        int currentTerm = request.getTerm();
+        long currentTerm = request.getTerm();
         String nodeId = request.getLeaderId();
         String followerId = peer;
         InstallSnapshotResponse response = null;

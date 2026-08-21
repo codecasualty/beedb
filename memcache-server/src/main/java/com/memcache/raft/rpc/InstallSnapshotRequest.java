@@ -14,28 +14,31 @@ import com.memcache.cache.CacheItem;
  */
 public class InstallSnapshotRequest {
     
-    private int     term;
+    private long     term;
     private String  leaderId;
     private int     lastIncludedIndex;
-    private int     lastIncludedTerm;
+    private long     lastIncludedTerm;
     private Map<String , CacheItem> cacheState;
+    private String   requestId;
 
     @JsonCreator
     public InstallSnapshotRequest(
-        @JsonProperty("term") int term,
+        @JsonProperty("term") long term,
         @JsonProperty("leaderId") String leaderId,
         @JsonProperty("lastIncludedIndex") int lastIncludedIndex,
-        @JsonProperty("lastIncludedTerm") int lastIncludedTerm,
-        @JsonProperty("cacheState") Map<String , CacheItem> cacheState
+        @JsonProperty("lastIncludedTerm") long lastIncludedTerm,
+        @JsonProperty("cacheState") Map<String , CacheItem> cacheState,
+        @JsonProperty("requestId") String requestId
     ){
         this.term = term;
         this.leaderId = leaderId;
         this.lastIncludedIndex = lastIncludedIndex;
         this.lastIncludedTerm = lastIncludedTerm;
         this.cacheState = cacheState;
+        this.requestId = requestId;
     }
 
-    public int getTerm() {
+    public long getTerm() {
         return term;
     }
 
@@ -47,7 +50,7 @@ public class InstallSnapshotRequest {
         return lastIncludedIndex;
     }
 
-    public int getLastIncludedTerm() {
+    public long getLastIncludedTerm() {
         return lastIncludedTerm;
     }
 
@@ -55,8 +58,11 @@ public class InstallSnapshotRequest {
         return cacheState;
     }
 
+    public String getRequestId() {
+        return requestId;
+    }
     public String toString() {
-        return "InstallSnapshotRequest [term=" + term + ", leaderId=" + leaderId + ", lastIncludedIndex=" + lastIncludedIndex + ", lastIncludedTerm=" + lastIncludedTerm + ", cacheState=" + printCacheState() + "]";
+        return "InstallSnapshotRequest requestId {} [term=" + term + ", leaderId=" + leaderId + ", lastIncludedIndex=" + lastIncludedIndex + ", lastIncludedTerm=" + lastIncludedTerm + ", cacheState=" + printCacheState() + "]";
     }
     
     private String printCacheState() {
