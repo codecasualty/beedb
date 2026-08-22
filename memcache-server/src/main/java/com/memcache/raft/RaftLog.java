@@ -102,6 +102,7 @@ public class RaftLog {
     }
 
     public boolean compactTill(int index){
+        LOGGER.info("before compaciton log entries are {}", logEntries);
         logEntries = new ArrayList<>(logEntries.subList(index - lastIncludedIndex , logEntries.size()));
         LOGGER.info("after compaction log entries are {}", logEntries);
         return true;

@@ -49,9 +49,10 @@ public class RaftSnapshotManager {
     private       String       SNAPSHOT_DIR = "snapshots";
     private       String       TMP_DIR      = "tmp";
     private       String       SNAPSHOT_FILE_PATH = "snapshot.snap";
-    public RaftSnapshotManager(String snapshotDir, String tmpDir){
+    public RaftSnapshotManager(String snapshotDir, String tmpDir, String nodeId){
         this.SNAPSHOT_DIR = snapshotDir;
         this.TMP_DIR = tmpDir;
+        this.SNAPSHOT_FILE_PATH = SNAPSHOT_DIR+"/"+nodeId+"/snapshot.snap";
     }
 
     public boolean serialize(Map<String,CacheItem> cacheState, int lastIncludedIndex, long lastIncludedTerm, String nodeId){

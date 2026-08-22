@@ -93,6 +93,7 @@ public class RaftNode{
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport,
                     String stateDir, String snapshotDir, String tmpDir, String walDir
     ) {
+        LOGGER.info("creating raft node {} ", nodeId);
         this.peerAddresses = peerAddresses;
         this.nodeId = nodeId;
         this.cache = cache;
@@ -105,8 +106,8 @@ public class RaftNode{
         this.pendingRequests = new ConcurrentHashMap<>();
         this.transport = transport;
         MDC.put("nodeId", nodeId);
-        this.raftSnapshotManager = new RaftSnapshotManager(snapshotDir, tmpDir);
-        this.raftStateManager   =  new RaftStateManager(stateDir, tmpDir);
+        this.raftSnapshotManager = new RaftSnapshotManager(snapshotDir, tmpDir, nodeId);
+        this.raftStateManager   =  new RaftStateManager(stateDir, tmpDir, nodeId);
         RaftSnapshot raftSnapShot = raftSnapshotManager.deserialize(nodeId);
         RaftState    raftState    = raftStateManager.deserialize(nodeId);
         try{
@@ -122,6 +123,7 @@ public class RaftNode{
             log.setLastIncludedIndex(lastApplied);
             log.setLastIncludedTerm(lastIncludedTerm);
             this.cache.restoreState(raftSnapShot.getCacheState());
+            LOGGER.debug("restoring from snapshot , last included index {} last included term {} ", log.getLastIncludedIndex() , log.getLastIncludedTerm());
         }
         if(raftState != null){
             this.currentTerm = raftState.getTerm();
@@ -948,5 +950,12 @@ public class RaftNode{
         return log;
     }
 
+    Cache getCache(){
+        return cache;
+    }
+
+    String votedFor(){
+        return votedFor;
+    }
 }
 

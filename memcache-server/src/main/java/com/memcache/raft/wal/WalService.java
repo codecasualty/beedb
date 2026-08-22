@@ -330,18 +330,18 @@ public class WalService {
                     truncate(recordStart);
                     break;
                 }
-                WalRecord walRecord = objectMapper.readValue(jsonString, WalRecord.class);
                 // computing crc value for wal record
                 byte[] bytes = jsonString.getBytes(StandardCharsets.UTF_8);
                 crc32.reset();
                 crc32.update(bytes);
                 long checksum = crc32.getValue();
-
+                
                 // LOGGER.info("wal record is {} read from file", walRecord);
                 // LOGGER.info("new computed crc is {} ", checksum);
                 // LOGGER.info("stored crc is {} ", (Long.parseLong(crc.trim())));
                 // LOGGER.info("entry type is {} ", walRecord.entryType);
                 if(checksum == (Long.parseLong(crc.trim()))){
+                    WalRecord walRecord = objectMapper.readValue(jsonString, WalRecord.class);
                     EntryType entryType = walRecord.entryType;
                     LogEntry logEntry = walRecord.logEntry;
                     int fromIndex = walRecord.fromIndex;

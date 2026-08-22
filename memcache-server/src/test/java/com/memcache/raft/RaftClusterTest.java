@@ -4,6 +4,8 @@ import com.memcache.cache.Cache;
 import com.memcache.cache.CacheItem;
 import com.memcache.command.Command;
 import com.memcache.command.CommandType;
+import com.memcache.raft.rpc.RequestVoteRequest;
+import com.memcache.raft.rpc.RequestVoteResponse;
 import com.memcache.raft.wal.WalService;
 
 import org.junit.Test;
@@ -15,7 +17,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assert.assertNotEquals;
@@ -55,6 +59,7 @@ public class RaftClusterTest {
         tmpDir = folder.newFolder("tmp").getAbsolutePath();
         folder.newFolder("logs").getAbsoluteFile();
         walDir = folder.newFolder("wal").getAbsolutePath();
+        LOGGER.info("before creating node state dir is {}", stateDir);
         RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
         RaftNode raftNode2 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
         RaftNode raftNode3 = new RaftNode(Arrays.asList("localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
@@ -658,6 +663,113 @@ public class RaftClusterTest {
         assertEquals(8, walEntries.get(2).getIndex());
         assertEquals(9, walEntries.get(3).getIndex());
     }
+
+    @Test
+    public void shouldRestoreFromSnapshotAfterRestart() throws InterruptedException{
+
+        RaftNode leader = findLeader();
+        List<CompletableFuture<String>> list = new ArrayList<>();
+        for(int i = 1;i <= 7;i++){
+            Command command = new Command(CommandType.SET, "key"+i, 0, 0, 6);
+            command.setValue(("value"+i).getBytes());
+            CompletableFuture<String> future = leader.propose(command.serialize());
+            list.add(future);
+        }
+        Thread.sleep(500);
+        // waiting for replication to complete
+        for(CompletableFuture<String> future : list){
+            try{
+                String response = future.get(100, TimeUnit.SECONDS);
+                assertEquals("STORED\r\n", response);
+            }catch(Exception e){
+                fail("Test failed, expected value to be stored in cluster");
+            }
+        }
+        // because if we only stop leader, followers node do have address of leader and they will start eleciotn and start sending no op entry to leader(so called leader node )
+        // and our so called leader will replicate it , because our handle append entries will start as independent rpc threads and that would start inserting entries in our log
+        // therefore we are stopping all nodes 
+        for(RaftNode node : new ArrayList<>(raftNodesList)){
+            raftTransport.removeRaftNode(raftNodeAddress.get(node));
+            raftNodesList.remove(node);
+            raftNodeAddress.remove(node);
+            node.stop();
+        }
+        Thread.sleep(500);
+        // now we will spawn a new node and put it in leaders position 
+        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
+
+        // raftNode1.start();
+        LOGGER.info("--------------------new node is reading from wal ------------------");
+        // now check if we are able to read the wal and state from the stored system
+        RaftLog raftlogNewNode = raftNode1.getLog();
+        RaftLog leaderRaftlog = leader.getLog();
+        LOGGER.debug("printing leader raft log {} ", leaderRaftlog);
+        LOGGER.debug("printing new raft node log {} ", raftlogNewNode);
+        // now we can compare the logs size and last included index
+        assertEquals(leaderRaftlog.lastIndex(), raftlogNewNode.lastIndex());
+        assertEquals(leaderRaftlog.lastTerm(), raftlogNewNode.lastTerm());
+        assertEquals(leaderRaftlog.size(), raftlogNewNode.size());
+        for(int i = leaderRaftlog.getLastIncludedIndex(); i <= leaderRaftlog.lastIndex() ;i++){
+            LOGGER.info("raftlog.get({}) is {} and raftlogNewNode.get({}) is {}", i, leaderRaftlog.get(i), i, raftlogNewNode.get(i));
+            assertEquals(leaderRaftlog.get(i).getTerm() , raftlogNewNode.get(i).getTerm());
+            assertEquals(leaderRaftlog.get(i).getIndex() , raftlogNewNode.get(i).getIndex());
+        }
+
+        for(int i = 1;i < leaderRaftlog.getLastIncludedIndex();i++){
+            CacheItem item = raftNode1.getCache().get("key"+i);
+            CacheItem leaderItem = leader.getCache().get("key"+i);
+            LOGGER.info("asking leader {} for {} and value is {} ",leader.getNodeId(), "key"+i, new String(leaderItem.getValue()));
+            LOGGER.info("asking follower {} for {} and value is {} ",raftNode1.getNodeId(), "key"+i, new String(item.getValue()));
+            assertNotNull(item);
+            LOGGER.info("vlaue stored for key {} is {} ", ("key"+i) , "value"+i);
+            assertEquals(new String(leaderItem.getValue() , StandardCharsets.UTF_8) , new String(item.getValue() , StandardCharsets.UTF_8));
+        }
+
+        // now lets check if somehow we restored key5-key7 from raft logs 
+        for(int i = leaderRaftlog.getLastIncludedIndex() ; i <= leaderRaftlog.lastIndex() ;i++){
+            CacheItem item = raftNode1.getCache().get("key"+i);
+            assertNull(item);
+        }
+    }
+
+    @Test
+    public void shouldRestoreTermAndVoteAfterRestart() throws InterruptedException{
+        RaftNode leader = findLeader();
+        // first we let eleciton settle up and then kill the leader and find out what was saved as term and votedFor
+        // and after we start another node with same dirs , we assert if the snapshot is restored correctly with correct votedFor and term
+        // after that we generate a RequestVoteRequest with same term 
+        // then set some different value of voted for and check if we get a voteGranted response as false , then set with correcte voted for and now we should get voteGranted as true
+        // also try sending term as restored term - 1 adn we should get denial because we are behind in term
+        for(RaftNode node : new ArrayList<>(raftNodesList)){
+            raftTransport.removeRaftNode(raftNodeAddress.get(node));
+            raftNodesList.remove(node);
+            raftNodeAddress.remove(node);
+            node.stop();
+        }
+
+        Thread.sleep(500);
+
+
+        RaftStateManager raftStateManager = new RaftStateManager(stateDir, tmpDir, leader.getNodeId());
+        RaftState raftState = raftStateManager.deserialize(leader.getNodeId());
+        assertNotNull(raftState);
+        assertEquals(leader.getTerm(), raftState.getTerm());
+        assertEquals(leader.votedFor(), raftState.getVotedFor());
+        // now lets start another node with same dirs and assert if the snapshot is restored correctly with correct votedFor and term
+        List<String> peerAddress = leader.getPeerAddressList();
+        RaftNode raftNode1 = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
+        assertEquals(leader.getTerm(), raftNode1.getTerm());
+        assertEquals(leader.votedFor(), raftNode1.votedFor());
+
+        RequestVoteRequest request = new RequestVoteRequest(leader.getTerm() - 1, leader.getLog().lastIndex(), leader.getLog().lastTerm(), leader.getNodeId(), "");
+        RequestVoteResponse response = raftNode1.handleRequestVote(request);
+        assertFalse(response.isVoteGranted());
+        request.setTerm(leader.getTerm());
+        response = raftNode1.handleRequestVote(request);
+        assertTrue(response.isVoteGranted());
+        
+    }
+
 
 
 }

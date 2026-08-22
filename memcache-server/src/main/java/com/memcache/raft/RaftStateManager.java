@@ -28,10 +28,12 @@ public class RaftStateManager {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private       String       STATE_DIR    = "state";
     private       String       TMP_DIR      = "tmp";
+    private       String       STATE_FILE   = "state.snap";
 
-    public RaftStateManager(String stateDir, String tmpDir){
+    public RaftStateManager(String stateDir, String tmpDir, String nodeId){
         this.STATE_DIR = stateDir;
         this.TMP_DIR = tmpDir;
+        this.STATE_FILE = stateDir+"/"+nodeId+"/"+STATE_FILE;
     }
 
     public boolean serialize(long currentTerm , String votedFor, String nodeId){
@@ -62,6 +64,7 @@ public class RaftStateManager {
             fos.getFD().sync();
             try{
                 Files.move(Path.of(tempFilePath) , Path.of(destFilePath), StandardCopyOption.ATOMIC_MOVE);
+                STATE_FILE = destFilePath;
                 return true;
             }catch(IOException e){
                 LOGGER.error("error while renaming fies , in raftstate ", e);
@@ -85,7 +88,8 @@ public class RaftStateManager {
     }
 
     public RaftState deserialize(String nodeId){
-        String desPath = "state/"+nodeId+"/state.snap";
+        String desPath = getStateFile();
+        LOGGER.info("checking state snapshot file {} ", desPath);
         RaftState raftState = null;
         boolean isPresent = Files.isReadable(Path.of(desPath));
         LOGGER.info("file {} is present {} ", desPath, isPresent);
@@ -97,5 +101,9 @@ public class RaftStateManager {
             LOGGER.error("exception while deserializing raft state ", e);
         }
         return raftState;
+    }
+
+    public String getStateFile(){
+        return STATE_FILE;
     }
 }
