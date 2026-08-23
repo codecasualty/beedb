@@ -50,7 +50,7 @@ public class Server {
     RaftNode  raftNode;
     Cache  cache ;
     RaftRpcServer raftRpcServer;
-    private Logger LOGGER = LoggerFactory.getLogger(Server.class.getName());
+    private static Logger LOGGER = LoggerFactory.getLogger(Server.class.getName());
     private RaftTransport raftTransport;
 
     public static void main(String[] args) throws IOException{
@@ -78,7 +78,7 @@ public class Server {
             server.start(peers, nodeId , clientPort , raftPort, stateDir, snapshotDir, tmpDir, walDir);
 
         }catch(Exception e){
-            e.printStackTrace();
+            LOGGER.error("something is wrong {}",e);
         }
         
     }
@@ -173,7 +173,7 @@ public class Server {
         if(buffer.hasRemaining()) buffer.get();
         Command command = null;
         byte[] valueBytes = null;
-        System.out.println("command from client: " + commandLine.toString());
+        LOGGER.debug("command from client: {}", commandLine.toString());
         try{
             command = CommandParser.parse(commandLine.toString());
             LOGGER.info("command from client: {}", command);
@@ -200,7 +200,7 @@ public class Server {
                 sendResponse(key, response, selector);
             }catch (Exception e){
                 // TODO: handle exception
-                e.printStackTrace();
+                LOGGER.error("something is wrong {}",e);
             }
         });
 
@@ -233,7 +233,7 @@ public class Server {
             }                
         } catch (Exception e) {
             // TODO: handle exception
-            e.printStackTrace();
+            LOGGER.error("something is wrong {}",e);
             if(e instanceof ExecutionException && e.getCause() instanceof IllegalStateException){
                 String message  = "SERVER_ERROR " + ((IllegalStateException) e.getCause()).getMessage()+"\r\n";
                 return message.getBytes();

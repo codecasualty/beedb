@@ -70,11 +70,11 @@ public class RaftRpcServer {
                         socket.close();
                         LOGGER.info("connection closed from source node {}", socket.getInetAddress());
                         } catch (Exception e) {
-                            e.printStackTrace();
+                            LOGGER.error("something is wrong {}",e);
                         }
                     });
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    LOGGER.error("something is wrong {}",e);
 
                     // TODO: handle exception
                 }

@@ -19,6 +19,8 @@ public class HandlerFactory {
                 return new AppendHandler();
             case PREPEND:
                 return new PrependHandler();
+            case DELETE:
+                return new DeleteHandler();
             default:
                 return null;
         }

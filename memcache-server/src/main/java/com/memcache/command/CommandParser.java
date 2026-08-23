@@ -21,6 +21,7 @@ public class CommandParser {
             case APPEND:
             case PREPEND:
                 return parseStorageCommand(parts, type);
+            case DELETE:
             case GET:
                 return parseRetrievalCommand(parts, type);
             default:

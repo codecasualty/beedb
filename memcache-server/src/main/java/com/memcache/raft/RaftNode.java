@@ -93,7 +93,6 @@ public class RaftNode{
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport,
                     String stateDir, String snapshotDir, String tmpDir, String walDir
     ) {
-        LOGGER.info("creating raft node {} ", nodeId);
         this.peerAddresses = peerAddresses;
         this.nodeId = nodeId;
         this.cache = cache;

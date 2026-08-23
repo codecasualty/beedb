@@ -5,7 +5,8 @@ public enum ResponseStatus{
     NOT_STORED("NOT_STORED"),
     NOT_FOUND("NOT_FOUND"),
     ERROR("ERROR"),
-    END("END");
+    END("END"),
+    DELETED("DELETED");
 
     private String name;
 

@@ -8,7 +8,6 @@ import java.util.stream.Collectors;
 public class Cache {
     
     private ConcurrentHashMap<String, CacheItem> map = new ConcurrentHashMap<>();
-
     public Cache() {
     }
 
@@ -28,8 +27,12 @@ public class Cache {
         map.put(key, new CacheItem(key, value, flags, expiry));
     }
 
-    public void remove(String key) {
-        map.remove(key);
+    public boolean remove(String key) {
+        if(map.containsKey(key)){
+            map.remove(key);
+            return true;
+        }
+        return false;
     }
 
     public void set(CacheItem item) {
@@ -47,6 +50,9 @@ public class Cache {
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
+    public int size(){
+        return map.size();
+    }
     public void restoreState(Map<String , CacheItem> state){
         map.clear();
         map.putAll(state);

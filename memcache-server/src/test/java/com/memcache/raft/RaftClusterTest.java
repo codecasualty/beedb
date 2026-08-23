@@ -767,8 +767,172 @@ public class RaftClusterTest {
         request.setTerm(leader.getTerm());
         response = raftNode1.handleRequestVote(request);
         assertTrue(response.isVoteGranted());
+        request = new RequestVoteRequest(leader.getTerm(), leader.getLog().lastIndex(), leader.getLog().lastTerm(), leader.getNodeId()+"1", "");
+        response = raftNode1.handleRequestVote(request);
+        assertFalse(response.isVoteGranted());
         
     }
+
+    @Test
+    public void shouldRestoreInstalledSnapshotAfterRestart() throws InterruptedException{
+        // we first find the leader and then remove any one follower and then insert data in cluster,
+        // we insert data such that snapshots are created and then bring back killed leader now it must receive snapshots
+        // after that we verify snapshots are correctly restored by querying cache and checking logs
+
+        RaftNode leader = findLeader();
+        RaftNode killedNode = null;
+        String addressNodeToRemoveString = raftNodeAddress.get(leader);
+        for(RaftNode node : new ArrayList<>(raftNodesList)){
+            if(node == leader) continue;
+            addressNodeToRemoveString = raftNodeAddress.get(node);
+            raftTransport.removeRaftNode(raftNodeAddress.get(node));
+            raftNodesList.remove(node);
+            raftNodeAddress.remove(node);
+            node.stop();
+            killedNode = node;
+            LOGGER.debug("killed node is {} ", killedNode.getNodeId());
+            break;
+        }
+        Thread.sleep(500);
+        for(int i = 1;i <= 17;i++){
+            Command command = new Command(CommandType.SET, "key"+i, 0, 0, 6);
+            command.setValue(("value"+i).getBytes());
+            CompletableFuture<String> future = leader.propose(command.serialize());
+            try{
+                future.get(1000, TimeUnit.MILLISECONDS);
+            }catch(Exception e){
+                fail("Test failed, expected value to be stored in cluster");
+            }
+        }
+        // Thread.sleep(500);
+        // now lets bring back our killed node
+        List<String> peerAddress = killedNode.getPeerAddressList();
+        LOGGER.info("peer address is {} ", peerAddress);
+        RaftNode raftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
+        LOGGER.info("address of raft node {} is {} ", raftNode.getNodeId(), addressNodeToRemoveString);
+        raftNodeAddress.put(raftNode, addressNodeToRemoveString);
+        raftNodesList.add(raftNode);
+        raftTransport.addRaftNode(raftNodeAddress.get(raftNode), raftNode);
+        raftNode.start();
+        // wait for new leader election
+        int temp = 0;
+        while(raftNode.getCache().size() != 17 && temp++ < 100){
+
+            Thread.sleep(100);
+        }
+        if(temp == 10) fail("Test failed, expected value to be stored in cluster");
+        // Thread.sleep(500);
+
+        // now lets check if we are able to restore installed snapshot
+        for(int i = 1;i <= 17;i++){
+            CacheItem item = raftNode.getCache().get("key"+i);
+            assertNotNull(item);
+            String value = new String(item.getValue(), StandardCharsets.UTF_8);
+            String leaderValue = new String(leader.getCache().get("key"+i).getValue(), StandardCharsets.UTF_8);
+            LOGGER.info("asking leader {} for {} and value is {} ",leader.getNodeId(), "key"+i, new String(leader.getCache().get("key"+i).getValue()));
+            LOGGER.info("asking follower {} for {} and value is {} ",raftNode.getNodeId(), "key"+i, new String(item.getValue()));
+            assertEquals(leaderValue, value);
+        }
+
+        raftTransport.removeRaftNode(raftNodeAddress.get(raftNode));
+        raftNodesList.remove(raftNode);
+        raftNodeAddress.remove(raftNode);
+        raftNode.stop();
+
+        RaftNode newRaftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir);
+        raftNodeAddress.put(newRaftNode, addressNodeToRemoveString);
+        raftNodesList.add(newRaftNode);
+        raftTransport.addRaftNode(raftNodeAddress.get(newRaftNode), newRaftNode);
+        newRaftNode.start();
+        temp = 0;
+        while(newRaftNode.getCache().size() != 17 && temp++ < 100){
+
+            Thread.sleep(100);
+        }
+        if(temp == 10) fail("Test failed, expected value to be stored in cluster");
+        int lastIncludedIndex = raftNode.getLog().getLastIncludedIndex();
+        for(int i = 1;i < lastIncludedIndex;i++){
+            CacheItem item = newRaftNode.getCache().get("key"+i);
+            assertNotNull(item);
+            String value = new String(item.getValue(), StandardCharsets.UTF_8);
+            String leaderValue = new String(raftNode.getCache().get("key"+i).getValue(), StandardCharsets.UTF_8);
+            LOGGER.info("asking leader {} for {} and value is {} ",raftNode.getNodeId(), "key"+i, new String(raftNode.getCache().get("key"+i).getValue()));
+            LOGGER.info("asking follower {} for {} and value is {} ",newRaftNode.getNodeId(), "key"+i, new String(item.getValue()));
+            assertEquals(leaderValue, value);
+        }
+
+
+
+        
+    }
+
+    @Test
+    public void shouldDeleteEntry() throws InterruptedException{
+        RaftNode leader = findLeader();
+        RaftLog raftlog = leader.getLog();
+        int logSize = raftlog.size();
+        Command command = new Command(CommandType.SET, "Foo", 0, 0, 3);
+        command.setValue("bar".getBytes());
+        CompletableFuture<String> future = leader.propose(command.serialize());
+        try{
+            String response = future.get(1, TimeUnit.SECONDS);
+            assertEquals("STORED\r\n", response);
+            assertEquals(logSize + 1, raftlog.size());
+        }catch(Exception e){
+            fail("Test failed, expected value to be stored in cluster");
+        }
+        logSize = raftlog.size();
+        
+        // making sure entry is saved in all nodes
+        for(RaftNode node : raftNodesList){
+            CacheItem item = node.get("Foo");
+            int temp = 0;
+            while(item == null && temp++ < 100){
+                Thread.sleep(100);
+                item = node.get("Foo");
+            }
+            assertNotNull(item);
+        }
+        // now lets delete the entry
+        command = new Command(CommandType.DELETE, "Foo", 0, 0, 0);
+        future = leader.propose(command.serialize());
+        try{
+            String response = future.get(1, TimeUnit.SECONDS);
+            assertEquals("DELETED\r\n", response);
+            assertEquals(logSize + 1, raftlog.size());
+        }catch(Exception e){
+            fail("Test failed, expected value to be stored in cluster");
+        }
+        // making sure entry is deleted from each node
+        for(RaftNode node : raftNodesList){
+            CacheItem item = node.get("Foo");
+            int temp= 0 ;
+            while(item != null && temp++ < 100){
+                Thread.sleep(100);
+                item = node.get("Foo");
+            }
+            assertNull(item);
+        }
+        
+        logSize = raftlog.size(); 
+        command = new Command(CommandType.DELETE, "Doo", 0, 0, 0);
+        future = leader.propose(command.serialize());
+        try{
+            String response = future.get(1, TimeUnit.SECONDS);
+            assertEquals("NOT_FOUND\r\n", response);
+            assertEquals(logSize + 1, raftlog.size());
+        }catch(Exception e){
+            fail("Test failed, expected value to be stored in cluster");
+        }
+
+        for(RaftNode node : raftNodesList){
+            CacheItem item = node.get("Doo");
+            assertNull(item);
+        }
+
+
+    }
+
 
 
 

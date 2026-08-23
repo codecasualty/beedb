@@ -6,14 +6,18 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.util.Scanner;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class Client {
 
     public static void main(String[] args) throws IOException {
+        Logger LOGGER = LoggerFactory.getLogger(Client.class.getName());
         int clientPort = Integer.parseInt(args[0]);
         try (SocketChannel channel = SocketChannel.open(new InetSocketAddress("localhost", clientPort));
              Scanner scanner = new Scanner(System.in)) {
 
-            System.out.println("Connected to server. Type a message and press Enter:");
+            LOGGER.debug("Connected to server. Type a message and press Enter:");
 
             while (scanner.hasNextLine()) {
                 String line = scanner.nextLine();
@@ -28,7 +32,7 @@ public class Client {
                 if (bytesRead > 0) {
                     responseBuffer.flip();
                     String response = new String(responseBuffer.array(), 0, bytesRead);
-                    System.out.println("Server: " + response);
+                    LOGGER.debug("Response from server: {}", response);
                 }
             }
         }

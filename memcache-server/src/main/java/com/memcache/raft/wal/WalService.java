@@ -58,7 +58,7 @@ public class WalService {
             try{
                 writeToFile();
             }catch(Exception e){
-                // e.printStackTrace();
+                // LOGGER.error("something is wrong {}",e);
                 LOGGER.error("file in which write failed is {}", walFilePath);
                 LOGGER.error("error while writing to file, please check stack trace ", e);
                 shutdown();
@@ -220,7 +220,7 @@ public class WalService {
             // therefore we will start writing from the end of the file
             walFileChannel.position(walFileChannel.size());
         }catch(Exception e){
-            // e.printStackTrace();
+            // LOGGER.error("something is wrong {}",e);
             throw new RuntimeException(e);
         }
         
@@ -229,7 +229,7 @@ public class WalService {
         //     print(FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ));
 
         // }catch(Exception e){
-        //     e.printStackTrace();
+        //     LOGGER.error("something is wrong {}",e);
         // }
         // we have to reopen our actual file channel 
     }
@@ -371,7 +371,7 @@ public class WalService {
             // LOGGER.info("position/end pointer is {} ", walFileChannel.position());
             // LOGGER.info("size of file is {} ", walFileChannel.size());
         }catch(Exception e){
-            // e.printStackTrace();
+            // LOGGER.error("something is wrong {}",e);
             throw new RuntimeException(e);
         }
         goodSegmentEnd = -1;
@@ -388,7 +388,7 @@ public class WalService {
             walFileChannel.truncate(index);
             walFileChannel.position(index);
         }catch(Exception e){
-            // e.printStackTrace();
+            // LOGGER.error("something is wrong {}",e);
             throw new RuntimeException(e);
         }
     }
@@ -427,7 +427,7 @@ public class WalService {
             try{
                 walFileChannel.close();
             }catch(Exception e){
-                e.printStackTrace();
+                LOGGER.error("something is wrong {}",e);
             }
         }
     }
@@ -475,7 +475,7 @@ public class WalService {
             print(FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ));
 
         }catch(Exception e){
-            e.printStackTrace();
+            LOGGER.error("something is wrong {}",e);
         }
     }
 
