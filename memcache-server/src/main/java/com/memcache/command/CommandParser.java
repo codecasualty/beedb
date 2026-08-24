@@ -5,7 +5,8 @@ public class CommandParser {
     public static Command parse(String line) throws Exception{
         
         String[] parts = line.trim().split("\\s+");
-        if(parts.length < 2) throw new Exception("Invalid command");
+        // commenting below line because stats command does not have key
+        // if(parts.length < 2) throw new Exception("Invalid command");
         CommandType type = null;
         try{
             type = CommandType.valueOf(parts[0].toUpperCase());
@@ -24,6 +25,8 @@ public class CommandParser {
             case DELETE:
             case GET:
                 return parseRetrievalCommand(parts, type);
+            case STATS:
+                return new Command(type, null, 0, 0, -1);
             default:
                 throw new Exception("Invalid command");
         }

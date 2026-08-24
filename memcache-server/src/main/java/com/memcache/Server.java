@@ -217,7 +217,21 @@ public class Server {
     public byte[] processRequest(Command command) throws Exception{
         
         try {
-            if(command.getType() == CommandType.GET){
+            if(command.getType() == CommandType.STATS){
+                Map<String , String> stats = raftNode.getStats();
+                StringBuilder builder = new StringBuilder();
+                for(String key : stats.keySet()){
+                    builder.append("STAT ");
+                    builder.append(key);
+                    builder.append(" ");
+                    builder.append(stats.get(key));
+                    builder.append("\r\n");
+                }
+                builder.append("END\r\n");
+                LOGGER.debug("build string is {} ",builder.toString());
+                return builder.toString().getBytes();
+            }
+            else if(command.getType() == CommandType.GET){
                 Response response = CommandProcessor.process(command, cache);
                 return response.toProtocolString().getBytes();
             }

@@ -933,6 +933,66 @@ public class RaftClusterTest {
 
     }
 
+    @Test
+    public void shouldReturnStats() throws InterruptedException, ExecutionException, TimeoutException{
+        RaftNode leader = findLeader();
+        RaftLog raftlog = leader.getLog();
+        int logSize = raftlog.size();
+        Command command = new Command(CommandType.SET, "Foo", 0, 0, 3);
+        command.setValue("bar".getBytes());
+        CompletableFuture<String> future = leader.propose(command.serialize());
+        try{
+            String response = future.get(1, TimeUnit.SECONDS);
+            assertEquals("STORED\r\n", response);
+            assertEquals(logSize + 1, raftlog.size());
+        }catch(Exception e){
+            fail("Test failed, expected value to be stored in cluster");
+        }
+        logSize = raftlog.size();
+        
+        // making sure entry is saved in all nodes
+        for(RaftNode node : raftNodesList){
+            CacheItem item = node.get("Foo");
+            int temp = 0;
+            while(item == null && temp++ < 100){
+                Thread.sleep(100);
+                item = node.get("Foo");
+            }
+            assertNotNull(item);
+        }
+
+        Map<String , String> stats = leader.getStats();
+        StringBuilder builder = new StringBuilder();
+        for(String key : stats.keySet()){
+            builder.append("STAT ");
+            builder.append(key);
+            builder.append(" ");
+            builder.append(stats.get(key));
+            builder.append("\r\n");
+        }
+        int newSize = leader.getLog().size();
+        long term = leader.getTerm();
+        assertEquals(logSize, newSize);
+        LOGGER.debug("--------response:------- {}", builder.toString());
+        String response = stats.get("curr_items");
+        assertEquals("STAT curr_items 1", "STAT curr_items "+response);
+        response = stats.get("raft_node_id");
+        assertEquals("STAT raft_node_id "+leader.getNodeId(), "STAT raft_node_id "+response);
+        response = stats.get("raft_role");
+        assertEquals("STAT raft_role LEADER", "STAT raft_role "+response);
+        response = stats.get("raft_term");
+        assertEquals("STAT raft_term "+term, "STAT raft_term "+response);
+        response = stats.get("raft_commit_index");
+        assertEquals("STAT raft_commit_index 2", "STAT raft_commit_index "+response);
+        response = stats.get("raft_last_applied");
+        assertEquals("STAT raft_last_applied 2", "STAT raft_last_applied "+response);
+        response = stats.get("raft_last_included_index");
+        assertEquals("STAT raft_last_included_index 0", "STAT raft_last_included_index "+response);
+        response = stats.get("raft_log_size");
+        // one is sentinel entry , another is leader elected entry and next is set command entry
+        // and we are avoiding sentinel entry in log therefore we are checking for 2
+        assertEquals("STAT raft_log_size 2", "STAT raft_log_size "+response);
+    }
 
 
 

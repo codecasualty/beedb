@@ -51,7 +51,9 @@ public class Cache {
     }
 
     public int size(){
-        return map.size();
+        // count only unexpired keys when this method is called
+        Map<String, CacheItem> cacheState = getState();
+        return cacheState.size();
     }
     public void restoreState(Map<String , CacheItem> state){
         map.clear();

@@ -155,6 +155,7 @@ public class RaftNode{
         }
         // below method is synchronized internally and so we dont need to add this in synchronized block
         int votes = requestVoteFromPeers();
+        LOGGER.debug("total received votes are {}", votes);
         // because peerAddresses does not include our own address therefore we are adding + 1
         synchronized(this){
             if(isMajority(votes)){
@@ -224,6 +225,7 @@ public class RaftNode{
         MDC.put("requestId", request.getRequestId());
         // any exception throws by sendRequestVoteToPeer will be caught by exception handler , they are stored in future and unwrapped at future.get()
         // and then caught by catch block so no issues over here.
+        if(peerAddresses == null || peerAddresses.size() == 0) return new ArrayList<>();
         List<Future<RequestVoteResponse>> futures = peerAddresses.stream()
         .map(peer -> rpcExecutor.submit(wrapCallableWithMdc(() -> transport.sendRequestVoteToPeer(request, peer))))
         .collect(Collectors.toList());
@@ -911,6 +913,33 @@ public class RaftNode{
         , randomTime, TimeUnit.MILLISECONDS);
     }
 
+    public synchronized Map<String , String> getStats(){
+        /*
+        STAT curr_items 42
+        STAT raft_node_id node1
+        STAT raft_role LEADER
+        STAT raft_term 4
+        STAT raft_commit_index 87
+        STAT raft_last_applied 87
+        STAT raft_leader_id node1
+        STAT raft_last_included_index 80
+        STAT raft_log_size 8
+        END
+         */
+        Map<String , String> stats = new HashMap<>();
+        stats.put("curr_items" , getCache().size() + "");
+        stats.put("raft_node_id" , nodeId+"");
+        stats.put("raft_role" , getRole().toString());
+        stats.put("raft_term" , getTerm() + "");
+        stats.put("raft_commit_index" , commitIndex + "");
+        stats.put("raft_last_applied" , lastApplied + "");
+        if(leaderId != null) stats.put("raft_leader_id" , leaderId + "");
+        stats.put("raft_last_included_index" , getLog().getLastIncludedIndex() + "");
+        // avoiding sentinel entry in log
+        stats.put("raft_log_size" , (getLog().size() - 1) + "");
+        return stats;
+    }
+
     // some helper methods
     public CacheItem get(String key){
         return cache.get(key);
@@ -955,6 +984,10 @@ public class RaftNode{
 
     String votedFor(){
         return votedFor;
+    }
+
+    public int raftLogSize(){
+        return log.size();
     }
 }
 
