@@ -1,6 +1,7 @@
 package com.memcache.raft;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -913,7 +914,7 @@ public class RaftNode{
         , randomTime, TimeUnit.MILLISECONDS);
     }
 
-    public synchronized Map<String , String> getStats(){
+    public synchronized LinkedHashMap<String , String> getStats(){
         /*
         STAT curr_items 42
         STAT raft_node_id node1
@@ -926,7 +927,7 @@ public class RaftNode{
         STAT raft_log_size 8
         END
          */
-        Map<String , String> stats = new HashMap<>();
+        LinkedHashMap<String , String> stats = new LinkedHashMap<>();
         stats.put("curr_items" , getCache().size() + "");
         stats.put("raft_node_id" , nodeId+"");
         stats.put("raft_role" , getRole().toString());
