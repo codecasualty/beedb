@@ -240,7 +240,6 @@ public class RaftClusterTest {
         CompletableFuture<String> future = leaderNode.propose(command.serialize());
         // now wait for replication , lets wait for 100 ms , because after 50 ms hearbeat are send and keeping and headbuffer of 50ms
         // should be enough for replication to complete
-        String responseString = future.get(100, TimeUnit.MILLISECONDS);
         
         CacheItem item = leaderNode.get("Foo");
         int temp = 0;
@@ -249,6 +248,7 @@ public class RaftClusterTest {
             item = leaderNode.get("Foo");
         }
         assertNotNull(item);
+        String responseString = future.get(100, TimeUnit.MILLISECONDS);
     
         LOGGER.debug("----------------------------------------");
         LOGGER.debug("Response from leader before killing leader is {} ",responseString);
@@ -866,10 +866,11 @@ public class RaftClusterTest {
 
             Thread.sleep(100);
         }
-        if(temp == 10) fail("Test failed, expected value to be stored in cluster");
+        if(newRaftNode.getCache().size() != 17) fail("Test failed, expected value to be stored in cluster");
         int lastIncludedIndex = raftNode.getLog().getLastIncludedIndex();
         for(int i = 1;i < lastIncludedIndex;i++){
             CacheItem item = newRaftNode.getCache().get("key"+i);
+            temp = 0;
             assertNotNull(item);
             String value = new String(item.getValue(), StandardCharsets.UTF_8);
             String leaderValue = new String(raftNode.getCache().get("key"+i).getValue(), StandardCharsets.UTF_8);
