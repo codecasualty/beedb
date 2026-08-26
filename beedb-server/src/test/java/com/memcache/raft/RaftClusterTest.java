@@ -436,6 +436,15 @@ public class RaftClusterTest {
             futures.add(result);
         }
 
+        for(int i = 0;i < 10;i++){
+            CacheItem item = leader.get("key"+i);
+            int temp = 0;
+            while(item == null && temp++ < 100){
+                Thread.sleep(100);
+                item = leader.get("key"+i);
+            }
+            assertNotNull(item);
+        }
         for(CompletableFuture<String> future : futures){
             try{
                 String response = future.get(300, TimeUnit.MILLISECONDS);
