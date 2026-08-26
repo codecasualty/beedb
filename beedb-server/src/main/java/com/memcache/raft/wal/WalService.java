@@ -38,6 +38,7 @@ public class WalService {
     private final        int JSON_LENGTH = 8;
     private final        int CRC_LENGTH = 10;
     private final        Logger LOGGER = LoggerFactory.getLogger(WalService.class.getName());
+    private volatile     boolean stopping = false;
 
     public WalService(String walPath) throws IOException{
 
@@ -61,7 +62,7 @@ public class WalService {
                 // LOGGER.error("something is wrong {}",e);
                 LOGGER.error("file in which write failed is {}", walFilePath);
                 LOGGER.error("error while writing to file, please check stack trace ", e);
-                shutdown();
+                if(!stopping) shutdown();
                 break;
             }
         }
@@ -419,6 +420,7 @@ public class WalService {
     }
     
     public void shutdown(){
+        stopping = true;
         if(walQueue != null){
             for(PendingWrite pending : walQueue){
                 pending.future.completeExceptionally(new RuntimeException("Wal service is shutting down"));
