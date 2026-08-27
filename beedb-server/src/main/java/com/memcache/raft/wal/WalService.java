@@ -3,6 +3,7 @@ import com.memcache.raft.LogEntry;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -73,6 +74,7 @@ public class WalService {
         walQueue.add(new PendingWrite(walRecord, future));
         LOGGER.info("appended an entry in wal queue , entry is {}", walRecord);
         LOGGER.debug("appending an entry in wal queue, wal queue size is {}", walQueue.size());
+        LOGGER.debug("file path is {}", walFilePath);
         return future;
     }
     
@@ -96,6 +98,7 @@ public class WalService {
         LOGGER.debug("we have taken the records from queue");
         for(PendingWrite pending : records){
             WalRecord walRecordDummy = pending.walRecord;
+            LOGGER.debug("wal record is {} ", walRecordDummy);
             if(walRecordDummy.getEntryType() == EntryType.COMPACT){
                 compact(walRecordDummy);
                 continue;
@@ -117,7 +120,7 @@ public class WalService {
             String emit = String.format("%08d %010d ", bytes.length, checksum) + json + "\n";
             LOGGER.debug("going to write in files {} ", emit);
             walFileChannel.write(ByteBuffer.wrap(emit.getBytes(StandardCharsets.UTF_8)));
-            LOGGER.debug("wal record is {} written to file", walRecord);
+            LOGGER.debug("wal record is {} written to file {} ", walRecord, walFilePath);
             
         }
         // fsync
@@ -221,7 +224,7 @@ public class WalService {
             // therefore we will start writing from the end of the file
             walFileChannel.position(walFileChannel.size());
         }catch(Exception e){
-            // LOGGER.error("something is wrong {}",e);
+            LOGGER.error("something is wrong {}",e);
             throw new RuntimeException(e);
         }
         
@@ -453,7 +456,7 @@ public class WalService {
         LOGGER.debug("----------------------------------------\n");
     }
 
-    public void print(FileChannel fileChannel) throws IOException{
+    public void print(FileChannel fileChannel) throws IOException{        
         long endPointer = fileChannel.position();
         fileChannel.position(0);
         LOGGER.debug("end pointer is {} file size is {} ", endPointer, fileChannel.size());
@@ -471,16 +474,28 @@ public class WalService {
         LOGGER.debug("final position of file channel is {} ", fileChannel.position());
         LOGGER.debug("----------------------------------------\n");
 
-
     }
 
-    public void printFileChannel() {
+    public void printFileChannel(){
+
         try{
             print(FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ));
-
-        }catch(Exception e){
-            LOGGER.error("something is wrong {}",e);
         }
+        catch(IOException e){
+            LOGGER.error("something is wrong {}",e);
+            throw new RuntimeException(e);
+        }
+        // try(FileChannel fileChannel = FileChannel.open(Path.of(walFilePath), StandardOpenOption.READ)){
+        //     FileLock lock = fileChannel.tryLock(0, Long.MAX_VALUE, true);
+        //     if(lock == null) return;
+        //     try{
+        //         print(fileChannel);
+        //     }finally{
+        //         if(lock != null) lock.release();
+        //     }
+        // }catch(IOException e){
+        //     LOGGER.error("something is wrong {}",e);
+        // }
     }
 
     public long getPosition() throws IOException{
