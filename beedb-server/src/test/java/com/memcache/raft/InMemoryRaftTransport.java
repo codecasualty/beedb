@@ -38,7 +38,7 @@ public class InMemoryRaftTransport implements RaftTransport {
         LOGGER.debug("Request Vote Req by node {} to peer{} request is {} ", request.getCandidateId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
         try{
-            if(raftNode == null) return null;
+            if(raftNode == null || raftNode.serviceShuttingDown()) return null;
             return raftNode.handleRequestVote(request);
         }finally{
             if(saved != null) MDC.setContextMap(saved);
@@ -53,7 +53,7 @@ public class InMemoryRaftTransport implements RaftTransport {
         LOGGER.debug("Append Entry Req by node {} to peer{} request is {} ", request.getLeaderId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
         try{
-            if(raftNode == null) return null;
+            if(raftNode == null || raftNode.serviceShuttingDown()) return null;
             return raftNode.handleAppendEntries(request);
         }finally{
             if(saved != null) MDC.setContextMap(saved);
@@ -67,7 +67,7 @@ public class InMemoryRaftTransport implements RaftTransport {
         LOGGER.debug("Install Snapshot Req by node {} to peer{} request is {} ", request.getLeaderId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
         try{
-            if(raftNode == null) return null;
+            if(raftNode == null || raftNode.serviceShuttingDown()) return null;
             return raftNode.handleInstallSnapshot(request);
         }finally{
             if(saved != null) MDC.setContextMap(saved);

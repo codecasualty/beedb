@@ -561,6 +561,7 @@ public class RaftNode{
             }
         }
         LOGGER.debug("term {} node id {} vote denied <<->> requesstvotelastlogindex {} requestvotelastlogterm {} ", currentTerm, nodeId, requestVoteRequest.getTerm(), requestVoteRequest.getLastLogIndex(), requestVoteRequest.getLastLogTerm());
+        LOGGER.debug("response from node is {} ", response);
         return response;
     }
 
@@ -870,8 +871,8 @@ public class RaftNode{
                                 // if wal compaction fails we have snapsthots from where we can restore our cache and later apply wal entries after last included index
                                 LOGGER.debug("added an entry to do the compaction in wal");
                                 walService.append(new WalRecord(EntryType.COMPACT, null, snapShotApplied));
-                                LOGGER.debug("print file channel after compaction");
-                                walService.printFileChannel();
+                                // LOGGER.debug("print file channel after compaction");
+                                // walService.printFileChannel();
                                 // after lastapplied > snapshot threshold, each lastapplied + x will trigger snapshot
                                 // to avoid that we keep on increasing snapsthot threshold. that way 
                                 // lastapplied +x wont trigger snapshot until its greater than > lastapplied + 1000
@@ -979,9 +980,9 @@ public class RaftNode{
             cancelElectionTimer();    // cancels pending timer before shutdown
         }
 
-        walService.shutdown();
-        scheduler.shutdownNow();
         rpcExecutor.shutdownNow();
+        scheduler.shutdownNow();
+        walService.shutdown();
         applyExecutor.shutdownNow();
     }
 
@@ -1008,6 +1009,10 @@ public class RaftNode{
 
     public int raftLogSize(){
         return log.size();
+    }
+
+    public boolean serviceShuttingDown(){
+        return stopping;
     }
 }
 

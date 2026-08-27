@@ -98,6 +98,15 @@ public class RaftClusterTest {
         }
     }
 
+    public void waitForCacheEmpty(RaftNode node, String key) throws InterruptedException{
+        int temp = 0;
+        CacheItem val = node.getCache().get(key);
+        while(val != null && temp++ < 100){
+            Thread.sleep(100);
+            val = node.getCache().get(key);
+        }
+    }
+
     public void waitForCacheSizeIncrease(RaftNode node, int size) throws InterruptedException{
         int temp = 0;
         while(node.getCache().size() != size && temp++ < 100){
@@ -343,6 +352,7 @@ public class RaftClusterTest {
         // to catch up and then we will check our cluster is workign as expected.
 
         RaftNode leader = findLeader();
+        LOGGER.debug("leader is {} ", leader.getNodeId());
         RaftNode nodeToRemove = null;
         for(RaftNode node : raftNodesList){
             if(node == leader)continue;
@@ -350,11 +360,15 @@ public class RaftClusterTest {
             break;
         }
         assertNotNull(nodeToRemove);
-
+        LOGGER.debug("node to remove is {} ", nodeToRemove.getNodeId());
         // removing that node from our transport , not killing not calling stop
         String addressNodeToRemoveString = raftNodeAddress.get(nodeToRemove);
         raftTransport.removeRaftNode(addressNodeToRemoveString);
         raftNodeAddress.remove(nodeToRemove);
+        raftNodesList.remove(nodeToRemove);
+        nodeToRemove.stop();
+        Thread.sleep(1000);
+        LOGGER.debug("node which is removed is {} ", nodeToRemove.getNodeId());
         // will now push some entries in our funcitonal cluster
         // and wait for them to get replicated
         List<CompletableFuture<String>> futures = new ArrayList<>();
@@ -363,6 +377,8 @@ public class RaftClusterTest {
             command.setValue(("value"+i).getBytes());
             CompletableFuture<String> result = leader.propose(command.serialize());
             futures.add(result);
+            LOGGER.debug("key {} is pushed in leader {} ", i, leader.getNodeId());
+            LOGGER.debug("node which is removed is {} ", nodeToRemove.getNodeId());
         }
 
         for(int i = 1;i <= 10;i++){
@@ -372,6 +388,7 @@ public class RaftClusterTest {
         for(CompletableFuture<String> future : futures){
             try {
                 String response = future.get(500 , TimeUnit.MILLISECONDS);
+                LOGGER.debug("response from node is {} ",response);
                 assertEquals("STORED\r\n", response);
             } catch (Exception e) {
                 LOGGER.debug("entry is not committed in leader, waiting for majority");
@@ -380,24 +397,28 @@ public class RaftClusterTest {
         }
 
         // now we bring back our follower, which was thrown out of cluster
-        raftTransport.addRaftNode(addressNodeToRemoveString , nodeToRemove );
-        raftNodeAddress.put(nodeToRemove , addressNodeToRemoveString);
+        RaftNode newRaftnode = new RaftNode(nodeToRemove.getPeerAddressList(), nodeToRemove.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100, 200, 1000);
+        raftNodeAddress.put(newRaftnode , addressNodeToRemoveString);
+        raftTransport.addRaftNode(addressNodeToRemoveString , newRaftnode );
+        raftNodesList.add(newRaftnode);
+        newRaftnode.start();
+        Thread.sleep(1000);
         // now we will wait for 5000 ms because we hvae pushed 10 entires , so those entries should get replicated to follower and we dont want to 
         // query that node , because it may still be catching up with the leader. so we are waiting generously 
         // the reason we have such big sleep is , because there will be exchange of two snapshots and few entries as well and we dont want to query follower
         // too early
-        LOGGER.debug("waiting for 5 seconds before querying follower node {} ", nodeToRemove.getNodeId());
-        Thread.sleep(5000);
+        // LOGGER.debug("waiting for 5 seconds before querying follower node {} ", nodeToRemove.getNodeId());
+        // Thread.sleep(5000);
 
         for(int i = 1;i <= 10;i++){
-            waitForCacheFill(nodeToRemove, "key"+i, "value"+i);
+            waitForCacheFill(newRaftnode, "key"+i, "value"+i);
         }
 
         for(int i = 10;i >= 1 ;i--){
-            CacheItem item = nodeToRemove.get("key"+i);
+            CacheItem item = newRaftnode.get("key"+i);
             CacheItem leaderItem = leader.get("key"+i);
             LOGGER.debug("asking leader {} for {} and value is {} ",leader.getNodeId(), "key"+i, new String(leaderItem.getValue()));
-            LOGGER.debug("asking follower {} for {} and value is {} ",nodeToRemove.getNodeId(), "key"+i, new String(item.getValue()));
+            LOGGER.debug("asking follower {} for {} and value is {} ",newRaftnode.getNodeId(), "key"+i, new String(item.getValue()));
             assertNotNull(item);
             String value = new String(item.getValue());
             LOGGER.debug("vlaue stored at follower is {}", value);
@@ -932,10 +953,7 @@ public class RaftClusterTest {
         Command command = new Command(CommandType.SET, "Foo", 0, 0, 3);
         command.setValue("bar".getBytes());
         CompletableFuture<String> future = leader.propose(command.serialize());
-        int temp = 0;
-        while(leader.getCache().size() != 1 && temp++ < 100){
-            Thread.sleep(100);
-        }
+        waitForCacheFill(leader, "Foo", "bar");
         try{
             String response = future.get(1, TimeUnit.SECONDS);
             assertEquals("STORED\r\n", response);
@@ -954,6 +972,7 @@ public class RaftClusterTest {
         // now lets delete the entry
         command = new Command(CommandType.DELETE, "Foo", 0, 0, 0);
         future = leader.propose(command.serialize());
+        waitForCacheFill(leader, "Foo", "bar");
         try{
             String response = future.get(1, TimeUnit.SECONDS);
             assertEquals("DELETED\r\n", response);
@@ -963,7 +982,7 @@ public class RaftClusterTest {
         }
         // making sure entry is deleted from each node
         for(RaftNode node : raftNodesList){
-            waitForCacheFill(node, "Foo", "bar");
+            waitForCacheEmpty(node, "Foo");
             CacheItem item = node.get("Foo");
             assertNull(item);
         }

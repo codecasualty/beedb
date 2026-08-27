@@ -89,6 +89,12 @@ public class RaftRpcServer {
 
      */
     private void handleConnection(Socket socket) throws IOException {
+
+        if( raftNode.serviceShuttingDown()){
+            LOGGER.debug("service is shutting down , closing connection from source node {}", socket.getInetAddress());
+            socket.close();
+            return;
+        }
         // we will have to read request from socket depending on type of request
         // if its a request to append entries to log then we will have to read request from socket
         // and then call append entries method of raft node

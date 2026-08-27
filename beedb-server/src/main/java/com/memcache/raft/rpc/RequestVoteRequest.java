@@ -71,7 +71,7 @@ public class RequestVoteRequest {
     public String toString(){
         return "RequestVoteRequest{" + 
                 "requestId "+ requestId +
-                "term=" + term +
+                " term=" + term +
                 ", lastLogIndex=" + lastLogIndex +
                 ", lastLogTerm=" + lastLogTerm +
                 ", candidateId='" + candidateId + '\'' +
