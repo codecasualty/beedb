@@ -21,7 +21,7 @@ public class RequestVoteRequest {
 
     @JsonCreator
     public RequestVoteRequest(@JsonProperty("term") long term, @JsonProperty("lastLogIndex") int lastLogIndex,
-    @JsonProperty("lastLogTerm") long lastLogTerm, @JsonProperty("candidateId") String candidateId , @JsonProperty String requestId) {
+    @JsonProperty("lastLogTerm") long lastLogTerm, @JsonProperty("candidateId") String candidateId , @JsonProperty("requestId") String requestId) {
         this.term = term;
         this.lastLogIndex = lastLogIndex;
         this.lastLogTerm = lastLogTerm;

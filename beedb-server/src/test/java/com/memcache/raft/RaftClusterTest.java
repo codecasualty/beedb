@@ -89,6 +89,22 @@ public class RaftClusterTest {
         raftNodeAddress.clear();
     }
 
+    public void waitForCacheFill(RaftNode node, String key, String value) throws InterruptedException{
+        int temp = 0;
+        CacheItem val = node.getCache().get(key);
+        while(val == null && temp++ < 100){
+            Thread.sleep(100);
+            val = node.getCache().get(key);
+        }
+    }
+
+    public void waitForCacheSizeIncrease(RaftNode node, int size) throws InterruptedException{
+        int temp = 0;
+        while(node.getCache().size() != size && temp++ < 100){
+            Thread.sleep(100);
+        }
+    }
+
     private RaftNode findLeader() throws InterruptedException{
         int count = 0;
         RaftNode leaderNode = null;
@@ -139,6 +155,7 @@ public class RaftClusterTest {
 
         // we have pushed entry in leader 
         CompletableFuture<String> future = leaderNode.propose(command.serialize());
+        waitForCacheFill(leaderNode, "Foo", "bar");
         // now wait for replication , lets wait for 100 ms , because after 50 ms hearbeat are send and keeping and headbuffer of 50ms
         // should be enough for replication to complete
         String responseString = future.get(100, TimeUnit.MILLISECONDS);
@@ -153,6 +170,7 @@ public class RaftClusterTest {
         LOGGER.debug("----------------------------------------");
         for(RaftNode node: raftNodesList){
             if(node == leaderNode) continue;
+            waitForCacheFill(node, "Foo", "bar");
             CacheItem item = node.get("Foo");
             assertNotNull(item);
             String response = new String(item.getValue(), StandardCharsets.UTF_8);
@@ -179,6 +197,7 @@ public class RaftClusterTest {
         for(RaftNode node : raftNodesList){
             if(node.getRole() == NodeRole.FOLLOWER){
                 CompletableFuture<String> future = node.propose(command.serialize());
+                waitForCacheFill(node, "Hello", "world");
                 try{
                     future.get(100, TimeUnit.MILLISECONDS);
                 }catch(Exception e){
@@ -241,12 +260,8 @@ public class RaftClusterTest {
         // now wait for replication , lets wait for 100 ms , because after 50 ms hearbeat are send and keeping and headbuffer of 50ms
         // should be enough for replication to complete
         
+        waitForCacheFill(leaderNode, "Foo", "bar");
         CacheItem item = leaderNode.get("Foo");
-        int temp = 0;
-        while(item == null && temp++ < 100){
-            Thread.sleep(100);
-            item = leaderNode.get("Foo");
-        }
         assertNotNull(item);
         String responseString = future.get(100, TimeUnit.MILLISECONDS);
     
@@ -272,11 +287,7 @@ public class RaftClusterTest {
         // now check if still have that previous inserted entry
         for(RaftNode node : raftNodesList){
             item = node.get(command.getKey());
-            temp = 0;
-            while(item == null && temp++ < 100){
-                Thread.sleep(100);
-                item = node.get("Foo");
-            }    
+            waitForCacheFill(node, command.getKey(), "bar");
             assertNotNull(item);
             String storedValueInFollower = new String(item.getValue());
             LOGGER.debug("----------------------------------------");
@@ -312,6 +323,7 @@ public class RaftClusterTest {
         command.setValue("bar".getBytes());
 
         CompletableFuture<String> result = leader.propose(command.serialize());
+        waitForCacheFill(leader, "Foo", "bar");
 
         try{
             result.get(1000 , TimeUnit.MILLISECONDS);
@@ -353,6 +365,10 @@ public class RaftClusterTest {
             futures.add(result);
         }
 
+        for(int i = 1;i <= 10;i++){
+            waitForCacheFill(leader, "key"+i, "value"+i);
+        }
+
         for(CompletableFuture<String> future : futures){
             try {
                 String response = future.get(500 , TimeUnit.MILLISECONDS);
@@ -372,6 +388,10 @@ public class RaftClusterTest {
         // too early
         LOGGER.debug("waiting for 5 seconds before querying follower node {} ", nodeToRemove.getNodeId());
         Thread.sleep(5000);
+
+        for(int i = 1;i <= 10;i++){
+            waitForCacheFill(nodeToRemove, "key"+i, "value"+i);
+        }
 
         for(int i = 10;i >= 1 ;i--){
             CacheItem item = nodeToRemove.get("key"+i);
@@ -437,12 +457,8 @@ public class RaftClusterTest {
         }
 
         for(int i = 0;i < 10;i++){
+            waitForCacheFill(leader, "key"+i, "value"+i);
             CacheItem item = leader.get("key"+i);
-            int temp = 0;
-            while(item == null && temp++ < 100){
-                Thread.sleep(100);
-                item = leader.get("key"+i);
-            }
             assertNotNull(item);
         }
         for(CompletableFuture<String> future : futures){
@@ -460,6 +476,7 @@ public class RaftClusterTest {
             if(node == leader)continue;
             LOGGER.debug("Checking whether the node {} ", raftNodeAddress.get(node));
             for(int i = 0;i < 10;i++){
+                waitForCacheFill(node, "key"+i, "value"+i);
                 CacheItem item = node.get("key"+i);
                 assertNotNull(item);
                 String value = new String(item.getValue());
@@ -489,6 +506,7 @@ public class RaftClusterTest {
         command.setValue(("bar").getBytes());
 
         CompletableFuture<String> response = leader.propose(command.serialize());
+        waitForCacheFill(leader, "Foo", "bar");
         try{
             String result = response.get(100, TimeUnit.MILLISECONDS);
             assertEquals("STORED\r\n" , result);
@@ -543,6 +561,7 @@ public class RaftClusterTest {
         Command command = new Command(CommandType.SET, "Foo", 0, 0, 4);
         command.setValue("code".getBytes());
         CompletableFuture<String> future = leader.propose(command.serialize());
+        waitForCacheFill(leader, "Foo", "code");
         try{
             future.get(100, TimeUnit.SECONDS);
         }catch(Exception e){
@@ -584,6 +603,9 @@ public class RaftClusterTest {
             command.setValue(("value"+i).getBytes());
             CompletableFuture<String> result = leader.propose(command.serialize());
             futures.add(result);
+        }
+        for(int i = 0;i < 6;i++){
+            waitForCacheFill(leader, "key"+i, "value"+i);
         }
         for(CompletableFuture<String> future : futures){
             try {
@@ -636,6 +658,9 @@ public class RaftClusterTest {
             CompletableFuture<String> result = leader.propose(command.serialize());
             futures.add(result);
         }
+        for(int i = 0;i < 6;i++){
+            waitForCacheFill(leader, "key"+i, "value"+i);
+        }
         for(CompletableFuture<String> future : futures){
             try {
                 String response = future.get(3, TimeUnit.SECONDS);
@@ -652,6 +677,9 @@ public class RaftClusterTest {
             command.setValue(("value"+i).getBytes());
             CompletableFuture<String> result = leader.propose(command.serialize());
             futures.add(result);
+        }
+        for(int i = 6;i < 8;i++){
+            waitForCacheFill(leader, "key"+i, "value"+i);
         }
         for(CompletableFuture<String> future : futures){
             try {
@@ -697,6 +725,9 @@ public class RaftClusterTest {
             command.setValue(("value"+i).getBytes());
             CompletableFuture<String> future = leader.propose(command.serialize());
             list.add(future);
+        }
+        for(int i = 1;i <= 7;i++){
+            waitForCacheFill(leader, "key"+i, "value"+i);
         }
         Thread.sleep(500);
         // waiting for replication to complete
@@ -901,6 +932,10 @@ public class RaftClusterTest {
         Command command = new Command(CommandType.SET, "Foo", 0, 0, 3);
         command.setValue("bar".getBytes());
         CompletableFuture<String> future = leader.propose(command.serialize());
+        int temp = 0;
+        while(leader.getCache().size() != 1 && temp++ < 100){
+            Thread.sleep(100);
+        }
         try{
             String response = future.get(1, TimeUnit.SECONDS);
             assertEquals("STORED\r\n", response);
@@ -912,12 +947,8 @@ public class RaftClusterTest {
         
         // making sure entry is saved in all nodes
         for(RaftNode node : raftNodesList){
+            waitForCacheFill(node, "Foo", "bar");
             CacheItem item = node.get("Foo");
-            int temp = 0;
-            while(item == null && temp++ < 100){
-                Thread.sleep(100);
-                item = node.get("Foo");
-            }
             assertNotNull(item);
         }
         // now lets delete the entry
@@ -932,15 +963,11 @@ public class RaftClusterTest {
         }
         // making sure entry is deleted from each node
         for(RaftNode node : raftNodesList){
+            waitForCacheFill(node, "Foo", "bar");
             CacheItem item = node.get("Foo");
-            int temp= 0 ;
-            while(item != null && temp++ < 100){
-                Thread.sleep(100);
-                item = node.get("Foo");
-            }
             assertNull(item);
         }
-        
+    
         logSize = raftlog.size(); 
         command = new Command(CommandType.DELETE, "Doo", 0, 0, 0);
         future = leader.propose(command.serialize());
@@ -968,6 +995,7 @@ public class RaftClusterTest {
         Command command = new Command(CommandType.SET, "Foo", 0, 0, 3);
         command.setValue("bar".getBytes());
         CompletableFuture<String> future = leader.propose(command.serialize());
+        waitForCacheFill(leader, "Foo", "bar");
         try{
             String response = future.get(1, TimeUnit.SECONDS);
             assertEquals("STORED\r\n", response);
@@ -979,12 +1007,8 @@ public class RaftClusterTest {
         
         // making sure entry is saved in all nodes
         for(RaftNode node : raftNodesList){
+            waitForCacheFill(node, "Foo", "bar");
             CacheItem item = node.get("Foo");
-            int temp = 0;
-            while(item == null && temp++ < 100){
-                Thread.sleep(100);
-                item = node.get("Foo");
-            }
             assertNotNull(item);
         }
 
