@@ -11,7 +11,6 @@ public class GetHandler  implements CommandHandler {
     @Override
     public Response execute(Command command, Cache cache) {
         CacheItem item = cache.get(command.getKey());
-        if (item == null) return new Response(ResponseStatus.NOT_FOUND);
         Response response = new Response(ResponseStatus.END);
         response.addItem(item);
         return response;
