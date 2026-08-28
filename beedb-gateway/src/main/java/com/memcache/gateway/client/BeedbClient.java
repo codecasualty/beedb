@@ -17,16 +17,7 @@ public class BeedbClient {
         try(Socket socket = new Socket("localhost", 11211)){
             socket.setSoTimeout(6000);
             BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-            ByteInputStream byteInputStream = new ByteInputStream(socket.getInputStream());
-            ByteOutputStream byteOutputStream = new ByteOutputStream(socket.getOutputStream());
-            PrintWriter printWriter = new PrintWriter(byteOutputStream);
-           
-            
-
-
-
-            System.out.println(read);
-            System.out.println(new String(bytes1));
+            PrintWriter printWriter = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
 
             printWriter.print("stats\r\n");
             printWriter.flush();

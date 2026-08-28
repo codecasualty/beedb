@@ -12,3 +12,5 @@ tmp/
 logs/
 logs.txt
 node*.txt
+
+wal/
