@@ -12,7 +12,7 @@ public class GetHandler  implements CommandHandler {
     public Response execute(Command command, Cache cache) {
         CacheItem item = cache.get(command.getKey());
         Response response = new Response(ResponseStatus.END);
-        response.addItem(item);
+        if(item != null) response.addItem(item);
         return response;
     }
 }
