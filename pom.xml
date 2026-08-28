@@ -12,7 +12,7 @@
 
   <modules>
     <module>beedb-server</module>
-    <!-- <module>beedb-gateway</module> -->
+    <module>beedb-gateway</module>
   </modules>
 
   <properties>

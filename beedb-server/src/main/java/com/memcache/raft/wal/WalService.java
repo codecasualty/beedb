@@ -124,7 +124,9 @@ public class WalService {
             
         }
         // fsync
+        long t0 = System.nanoTime();
         walFileChannel.force(true);
+        LOGGER.info("METRIC wal_fsync fsyncUs={} batch={}", TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t0), records.size());
         LOGGER.debug("we have written all the records in queue");
         for(PendingWrite pending : records){
             pending.future.complete(null);

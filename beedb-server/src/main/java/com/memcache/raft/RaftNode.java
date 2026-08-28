@@ -12,6 +12,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.ArrayList;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -97,6 +99,12 @@ public class RaftNode{
     private int peerRetryBackoffInitialMs;
     private int peerRetryBackoffMaxMs;
     private volatile boolean stopping = false;
+
+    // locks and conditions for waking up replication threads from sleeping heartbeat intervals
+    private final ReentrantLock replicationLock = new ReentrantLock();
+    private final Condition notNewElements = replicationLock.newCondition();
+    
+    
 
     public RaftNode(List<String> peerAddresses, String nodeId, Cache cache, RaftTransport transport,
                     String stateDir, String snapshotDir, String tmpDir, String walDir,
@@ -410,6 +418,15 @@ public class RaftNode{
                 
             }
             else{
+                replicationLock.lock();
+                try{
+                    if(peers.get(peer).getNextIndex() > log.lastIndex())
+                        notNewElements.await(heartbeatInterval , TimeUnit.MILLISECONDS);
+                }catch(InterruptedException e){
+                    LOGGER.debug(" new elements are found but we are interrupted {} ", e);
+                }finally{
+                    replicationLock.unlock();
+                }
                 final AppendEntriesRequest request = getAppendEntriesRequest(peer);
                 if(!request.getEntries().isEmpty())
                     MDC.put("requestId", request.getEntry(0).getRequestId());
@@ -419,15 +436,11 @@ public class RaftNode{
                 // we are adding sleep because , if we dont have anything else to replicate, withoout sleep we will continously overwhelm the system
                 // which will flood the system , also our while loop is tight spin , meaning it will keep on sending heartbeats/appendentries continously
                 if(response != null && ((AppendEntriesResponse)response).isSuccess() && request.getEntries().isEmpty()){
-                    try{
-                        // sleep for heartbeatInterval ms
-                        LOGGER.debug("Response from peer{} was success but the response was no op Entry {} ", peer, (AppendEntriesResponse)response);
-                        LOGGER.debug("Soo , Going in Sleeeeeeeepzzzzzzzzzzzzzz");
-                        Thread.sleep(heartbeatInterval);
-                    }catch(InterruptedException e) {
-                        LOGGER.error("Inteerupted during sleep in replication loop for peer but response was received {} ", peer);
-    
-                    }
+                    // sleep for heartbeatInterval ms
+                    LOGGER.debug("Response from peer{} was success but the response was no op Entry {} ", peer, (AppendEntriesResponse)response);
+                    LOGGER.debug("Soo , Going in Sleeeeeeeepzzzzzzzzzzzzzz");
+                    // Thread.sleep(heartbeatInterval);
+                   
                 }
             }
 
@@ -650,7 +663,9 @@ public class RaftNode{
             // waiting outside synchronized block
             if(walfuture != null){
                 try{
+                    long t0 = System.nanoTime();
                     walfuture.get(5 , TimeUnit.SECONDS);
+                    LOGGER.info("METRIC wal_append waitUs={} entries={}", TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t0), request.getEntries().size());
                 }catch(Exception e){
                     LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
                         "while appending entry to wal , please check stack trace ", e);
@@ -806,6 +821,7 @@ public class RaftNode{
                 walfuture = walService.append(new WalRecord(EntryType.ENTRY , logEntry, 0));
                 LOGGER.debug("client proposed entry to leader requestId is {} stored at index {} and lastApplied is {} ", requestId, index, lastApplied);
             }
+
             
             synchronized(this){
                 try{
@@ -817,6 +833,14 @@ public class RaftNode{
                     return future;
                 }
             }
+
+            replicationLock.lock();
+            try{
+                notNewElements.signalAll();
+            }finally{
+                replicationLock.unlock();
+            }
+
         }finally{
             MDC.remove("requestId");
             MDC.remove("nodeId");
