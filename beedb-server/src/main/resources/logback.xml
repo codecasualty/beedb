@@ -1,4 +1,10 @@
 <configuration>
+
+    <!-- Flush appenders on JVM exit. Without this, immediateFlush=false plus the
+         async appender means the tail of the log is lost on shutdown, and for a
+         short-lived process, the ENTIRE log is lost. -->
+    <shutdownHook class="ch.qos.logback.core.hook.DefaultShutdownHook"/>
+
     <!-- set by the Makefile: java -Dnode.id=node1 ... -->
     <property name="NODE" value="${node.id:-node}"/>
 
@@ -33,6 +39,30 @@
         <!-- drop rather than block the caller -->
         <neverBlock>true</neverBlock>
     </appender>
+
+
+    <!-- Benchmark instrumentation. OFF by default: under load these were ~40,000
+         lines per minute, written to the same disk the WAL fsyncs to, which is
+         load competing with the thing being measured.
+         Set level="INFO" to collect metrics
+         against logs/<node>-metrics.log . -->
+    <appender name="METRICS_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/${NODE}-metrics.log</file>
+        <immediateFlush>false</immediateFlush>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>logs/${NODE}-metrics.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>3</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %X{nodeId} %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="METRICS" level="INFO" additivity="false">
+        <appender-ref ref="METRICS_FILE"/>
+    </logger>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>

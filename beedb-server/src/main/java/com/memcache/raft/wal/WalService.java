@@ -39,11 +39,18 @@ public class WalService {
     private final        int JSON_LENGTH = 8;
     private final        int CRC_LENGTH = 10;
     private final        Logger LOGGER = LoggerFactory.getLogger(WalService.class.getName());
-    private volatile     boolean stopping = false;
 
-    public WalService(String walPath) throws IOException{
+    // Metrics go to a dedicated "METRICS" logger, not the class logger, so they can be
+    // switched on for a benchmark without also enabling this class's DEBUG output.
+    // logback.xml has it OFF by default: under load these lines were ~40k/minute,
+    // written to the same disk the WAL fsyncs to.
+    private static final Logger METRICS = LoggerFactory.getLogger("METRICS");
+    private volatile     boolean stopping = false;
+    private final        String tmpDir;
+    public WalService(String walPath, String tmpDir) throws IOException{
 
         this.walFilePath = walPath;
+        this.tmpDir = tmpDir;
         createFileWithPermissions(walFilePath); 
         Path path = Paths.get(walFilePath);
         this.walQueue = new LinkedBlockingQueue<>();
@@ -61,7 +68,7 @@ public class WalService {
                 writeToFile();
             }catch(Exception e){
                 // LOGGER.error("something is wrong {}",e);
-                LOGGER.error("file in which write failed is {}", walFilePath);
+                LOGGER.error("file in which write failed is ", walFilePath);
                 LOGGER.error("error while writing to file, please check stack trace ", e);
                 if(!stopping) shutdown();
                 break;
@@ -72,7 +79,7 @@ public class WalService {
     public CompletableFuture<Void> append(WalRecord walRecord){
         CompletableFuture<Void> future = new CompletableFuture<>();
         walQueue.add(new PendingWrite(walRecord, future));
-        LOGGER.info("appended an entry in wal queue , entry is {}", walRecord);
+        LOGGER.debug("appended an entry in wal queue , entry is {}", walRecord);
         LOGGER.debug("appending an entry in wal queue, wal queue size is {}", walQueue.size());
         LOGGER.debug("file path is {}", walFilePath);
         return future;
@@ -126,7 +133,7 @@ public class WalService {
         // fsync
         long t0 = System.nanoTime();
         walFileChannel.force(true);
-        LOGGER.info("METRIC wal_fsync fsyncUs={} batch={}", TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t0), records.size());
+        METRICS.info("METRIC wal_fsync fsyncUs={} batch={}", TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t0), records.size());
         LOGGER.debug("we have written all the records in queue");
         for(PendingWrite pending : records){
             pending.future.complete(null);
@@ -139,7 +146,8 @@ public class WalService {
         int compactIndex = walRecord.getFromIndex();
         LOGGER.debug("compacting till index {} ", compactIndex);
         Path path = Path.of(walFilePath);
-        String tempFilePath = "/tmp"+path.getParent().toString()+"/"+"wal.temp";
+        Path tmpPath = Path.of(tmpDir);
+        String tempFilePath = tmpPath.toString()+"/"+"wal.temp";
         LOGGER.debug("temp file path is {}", tempFilePath);
         createFileWithPermissions(tempFilePath);
         // now we will copy all entries from wal only from compactIndex till last element in wal
@@ -147,7 +155,7 @@ public class WalService {
         // so we will be writing all the entries in temp file
         try(
             
-            FileChannel tempFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
+            FileChannel tempFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
         ){    
             LOGGER.debug("***************printing wal file channel before compaction ");
             print(walFileChannel);

@@ -27,6 +27,7 @@ import com.memcache.raft.InMemoryRaftTransport;
 import com.memcache.raft.NodeRole;
 import com.memcache.raft.RaftClusterTest;
 import com.memcache.raft.RaftNode;
+import com.memcache.raft.TestTimings;
 
 public class ServerRoutingTest {
     private String stateDir = null;
@@ -68,9 +69,9 @@ public class ServerRoutingTest {
         cache1 = new Cache();
         cache2 = new Cache();
         cache3 = new Cache();
-        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", cache1, raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100, 200, 1000);
-        RaftNode raftNode2 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11213"), "node2", cache2, raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100, 200, 1000);
-        RaftNode raftNode3 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11212"), "node3", cache3, raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100, 200, 1000);
+        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", cache1, raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode2 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11213"), "node2", cache2, raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode3 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11212"), "node3", cache3, raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
         raftNodeAddress.put(raftNode1, "localhost:11211");
         raftNodeAddress.put(raftNode2, "localhost:11212");
         raftNodeAddress.put(raftNode3, "localhost:11213");

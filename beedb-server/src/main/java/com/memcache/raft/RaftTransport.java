@@ -8,7 +8,7 @@ import com.memcache.raft.rpc.InstallSnapshotRequest;
 import com.memcache.raft.rpc.InstallSnapshotResponse;
 
 public interface RaftTransport {
-    RequestVoteResponse sendRequestVoteToPeer(RequestVoteRequest request, String peer);
-    AppendEntriesResponse sendAppendEntriesToPeer(AppendEntriesRequest request, String peer);
-    InstallSnapshotResponse sendInstallSnapshotToPeer(InstallSnapshotRequest request, String peer);
+    RpcResult<RequestVoteResponse> sendRequestVoteToPeer(RequestVoteRequest request, String peer);
+    RpcResult<AppendEntriesResponse> sendAppendEntriesToPeer(AppendEntriesRequest request, String peer);
+    RpcResult<InstallSnapshotResponse> sendInstallSnapshotToPeer(InstallSnapshotRequest request, String peer);
 }
