@@ -48,6 +48,11 @@ public class RaftLog {
         return new ArrayList<LogEntry>(logEntries.subList(fromIndex - lastIncludedIndex, logEntries.size()));
     }
 
+    public List<LogEntry> getFrom(int fromIndex, int maxEntries){
+        int toIndex = Math.min(fromIndex + maxEntries - lastIncludedIndex , logEntries.size());
+        return new ArrayList<LogEntry>(logEntries.subList(fromIndex - lastIncludedIndex, toIndex));
+    }
+
     // this is for vote restriction , we want to make sure that we are electing the competent leader
     public boolean isUpToDate(int index, long term){
         LOGGER.debug("request node index {} term {} & current node lastindex {} lastterm {} ", index, term, lastIndex(), lastTerm());
@@ -86,6 +91,7 @@ public class RaftLog {
     }
 
     public long termAt(int index){
+        if(index < lastIncludedIndex) return lastIncludedTerm;
         return logEntries.get(index - lastIncludedIndex).getTerm();
     }
 
@@ -125,7 +131,7 @@ public class RaftLog {
     }
 
     public void remove(int index){
-        logEntries.remove(index);
+        logEntries.remove(index - lastIncludedIndex);
     }
 
     public String toString(){
@@ -135,4 +141,14 @@ public class RaftLog {
                 ", lastIncludedTerm=" + lastIncludedTerm +
                 '}';
     }
+
+	public int getFirstIndex(long conflictTerm, int prevLogIndex) {
+		if(prevLogIndex > lastIndex()) return lastIndex() + 1;
+        else if(prevLogIndex <= lastIncludedIndex) return lastIncludedIndex;
+        int index = prevLogIndex + 1;
+        while(index > lastIncludedIndex && conflictTerm == termAt(index)){
+            index--;
+        }
+        return index;
+	}
 }

@@ -83,7 +83,13 @@ public class RaftNode{
     RaftSnapshotManager raftSnapshotManager;
     RaftStateManager    raftStateManager;
     WalService          walService;
-    private Logger LOGGER = LoggerFactory.getLogger(RaftNode.class.getName());
+    private static final Logger LOGGER = LoggerFactory.getLogger(RaftNode.class);
+
+    // Metrics go to a dedicated "METRICS" logger, not the class logger, so they can be
+    // switched on for a benchmark without also enabling this class's DEBUG output.
+    // logback.xml has it OFF by default: under load these lines were ~40k/minute,
+    // written to the same disk the WAL fsyncs to.
+    private static final Logger METRICS = LoggerFactory.getLogger("METRICS");
 
     // raft snapshot progress variable
     // its marked as volatile because its changed by threads while other threads might read
@@ -92,6 +98,7 @@ public class RaftNode{
     private volatile boolean inProgress;
     private          int     snapShotThreshold = 1000;
     private          int     snapShotLimit = 1000;
+    private final    int     maxEntriesPerRequest = 50;
 
     private int minElectionTimeout;
     private int maxElectionTimeout;
@@ -135,7 +142,7 @@ public class RaftNode{
         RaftSnapshot raftSnapShot = raftSnapshotManager.deserialize(nodeId);
         RaftState    raftState    = raftStateManager.deserialize(nodeId);
         try{
-            this.walService           = new WalService(walDir+"/"+nodeId+"/wal.log");
+            this.walService           = new WalService(walDir+"/"+nodeId+"/wal.log", tmpDir+"/"+nodeId);
         }catch(Exception e){
             LOGGER.error("error while creating wal service, no walDir found or some other error", e);
             if(!stopping)
@@ -252,17 +259,17 @@ public class RaftNode{
         // any exception throws by sendRequestVoteToPeer will be caught by exception handler , they are stored in future and unwrapped at future.get()
         // and then caught by catch block so no issues over here.
         if(peerAddresses == null || peerAddresses.size() == 0) return new ArrayList<>();
-        List<Future<RequestVoteResponse>> futures = peerAddresses.stream()
+        List<Future<RpcResult<RequestVoteResponse>>> futures = peerAddresses.stream()
         .map(peer -> rpcExecutor.submit(wrapCallableWithMdc(() -> transport.sendRequestVoteToPeer(request, peer))))
         .collect(Collectors.toList());
         List<RequestVoteResponse> responses = new ArrayList<>();
         LOGGER.debug("term {} node id {} vote request {} to peers {} ", currentTerm, nodeId, request , peerAddresses);
-        for(Future<RequestVoteResponse> future: futures){
+        for(Future<RpcResult<RequestVoteResponse>> future: futures){
             try{
                 // 150 is the timeout 
-                RequestVoteResponse response = future.get(150, TimeUnit.MILLISECONDS);
-                if(response != null)
-                    responses.add(response);
+                RpcResult<RequestVoteResponse> result = future.get(300, TimeUnit.MILLISECONDS);
+                if(result.isOk())
+                    responses.add(result.getResponse());
             }catch(Exception e){
                 // not able to get response from other nodes, either peer unreachable or timeout
                 LOGGER.error("Exception in sendVotesRequestInParallel {} ", e);
@@ -400,76 +407,93 @@ public class RaftNode{
         MDC.put("nodeId", nodeId);
         LOGGER.debug("term {} node id {} replication loop for peer {} & current node is leader {} ", currentTerm, nodeId, peer, isLeader());
         while(isLeader()){
-            
-            // making a decision to either send appendentries to peer or installsnapshot to peer
-            // and for making that decision we will use nextIndex of particualr peer
-            // if the nextindex which needs to be replicated/sent to peer is less than our last applied index (last applied 
-            // denotes the index of last entry up to which we have taken snapshot of our cache and compacted our wal and truncated our log)
-            // that means we have to send install snapsthot to peer
-            boolean nullResponse = false;
-            Object response = null;
-            if(peers.get(peer).getNextIndex() <= log.getLastIncludedIndex()){
-                final InstallSnapshotRequest request = getInstallSnapshotRequest(peer);
-                MDC.put("requestId", request.getRequestId());
-                LOGGER.debug("install snapshot :- term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
-                response = transport.sendInstallSnapshotToPeer(request , peer);
-                LOGGER.debug("Received install snapshot response {} ", response);
-                if(response == null) nullResponse = true;
-                
-            }
-            else{
-                replicationLock.lock();
-                try{
-                    if(peers.get(peer).getNextIndex() > log.lastIndex())
-                        notNewElements.await(heartbeatInterval , TimeUnit.MILLISECONDS);
-                }catch(InterruptedException e){
-                    LOGGER.debug(" new elements are found but we are interrupted {} ", e);
-                }finally{
-                    replicationLock.unlock();
-                }
-                final AppendEntriesRequest request = getAppendEntriesRequest(peer);
-                if(!request.getEntries().isEmpty())
-                    MDC.put("requestId", request.getEntry(0).getRequestId());
-                LOGGER.debug("term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
-                response = transport.sendAppendEntriesToPeer(request , peer);
-                if(response == null) nullResponse = true;
-                // we are adding sleep because , if we dont have anything else to replicate, withoout sleep we will continously overwhelm the system
-                // which will flood the system , also our while loop is tight spin , meaning it will keep on sending heartbeats/appendentries continously
-                if(response != null && ((AppendEntriesResponse)response).isSuccess() && request.getEntries().isEmpty()){
-                    // sleep for heartbeatInterval ms
-                    LOGGER.debug("Response from peer{} was success but the response was no op Entry {} ", peer, (AppendEntriesResponse)response);
-                    LOGGER.debug("Soo , Going in Sleeeeeeeepzzzzzzzzzzzzzz");
-                    // Thread.sleep(heartbeatInterval);
-                   
-                }
-            }
+            try{
 
-            // AppendEntriesResponse response = sendAppendEntriesToPeerInParallel(request , peer);
-            LOGGER.debug("term {} node id {} response from peer {} is -> {} ", currentTerm, nodeId, peer, response);
-            if(nullResponse){
-                // if our response is null , try after some time , this is to avoid infinite loop
-                // in case of some network issue
-                try{
-                    LOGGER.debug("Response from peer {} was null....Going in sleep ", peer);
-                    Thread.sleep(networkFailureSleepTime);
-                    // increase the network failure sleep time by a factor of 2 and max it by 1000 ms
-                    networkFailureSleepTime = Math.min(networkFailureSleepTime * 2, peerRetryBackoffMaxMs);
-                }catch(InterruptedException e){
-                    LOGGER.error("Inteerupted during sleep in replication loop for peer {} ", peer);
-
+                // making a decision to either send appendentries to peer or installsnapshot to peer
+                // and for making that decision we will use nextIndex of particualr peer
+                // if the nextindex which needs to be replicated/sent to peer is less than our last applied index (last applied 
+                // denotes the index of last entry up to which we have taken snapshot of our cache and compacted our wal and truncated our log)
+                // that means we have to send install snapsthot to peer
+                // boolean nullResponse = false;
+                // RpcResult<T> response;
+                if(peers.get(peer).getNextIndex() <= log.getLastIncludedIndex()){
+                    final InstallSnapshotRequest request = getInstallSnapshotRequest(peer);
+                    MDC.put("requestId", request.getRequestId());
+                    LOGGER.debug("install snapshot :- term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
+                    RpcResult<InstallSnapshotResponse> rpcResult = transport.sendInstallSnapshotToPeer(request , peer);
+                    if(rpcResult.isOk()){
+                        InstallSnapshotResponse response = rpcResult.getResponse();
+                        LOGGER.debug("Received install snapshot response {} ", response);
+                        synchronized(this){
+                            long term = response.getTerm();
+                            if(term > currentTerm){
+                                stepDownDueToHigherTerm(term);
+                                return;
+                            }
+                            updatePeerState(response , peer);
+                            mayBeAdvanceCommitIndex();
+                            networkFailureSleepTime = peerRetryBackoffInitialMs;
+                        }
+                    }else if(rpcResult.isUnreachable()){
+                        LOGGER.debug("Peer {} is unreachable ", peer);
+                        LOGGER.debug("Soo, Going to sleepzzzzzzzzz");
+                        try{
+                            Thread.sleep(heartbeatInterval);
+                        }
+                        catch(InterruptedException e){
+                            LOGGER.debug(" new elements are found but we are interrupted {} ", e);
+                        }   
+                    }
+                    // for timeout and bad response no sleep at all, keep on working :) 
+                    
                 }
-                continue;
-            }     
-            
-            synchronized(this){
-                long term = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getTerm() : ((InstallSnapshotResponse)response).getTerm();
-                if(term > currentTerm){
-                    stepDownDueToHigherTerm(term);
-                    return;
+                else{
+                    replicationLock.lock();
+                    try{
+                        if(peers.get(peer).getNextIndex() > log.lastIndex())
+                            notNewElements.await(heartbeatInterval , TimeUnit.MILLISECONDS);
+                    }catch(InterruptedException e){
+                        LOGGER.debug(" new elements are found but we are interrupted {} ", e);
+                    }finally{
+                        replicationLock.unlock();
+                    }
+                    final AppendEntriesRequest request = getAppendEntriesRequest(peer);
+                    if(!request.getEntries().isEmpty())
+                        MDC.put("requestId", request.getEntry(0).getRequestId());
+                    LOGGER.debug("term {} node id {} replication to peer {} request {} ", currentTerm, nodeId, peer, request);
+                    RpcResult<AppendEntriesResponse> rpcResult = transport.sendAppendEntriesToPeer(request , peer);
+                    if(rpcResult.isOk()){
+                        AppendEntriesResponse response = rpcResult.getResponse();
+                        LOGGER.debug("Received append entries response {} ", response);
+                        synchronized(this){
+                            long term = response.getTerm();
+                            if(term > currentTerm){
+                                stepDownDueToHigherTerm(term);
+                                return;
+                            }
+                            updatePeerState(response , peer);
+                            mayBeAdvanceCommitIndex();
+                            networkFailureSleepTime = peerRetryBackoffInitialMs;
+                        }
+                    }
+                    else if(rpcResult.isUnreachable()){
+                        LOGGER.debug("Peer {} is unreachable ", peer);
+                        LOGGER.debug("Soo, Going to sleepzzzzzzzzz");
+                        try{
+                            Thread.sleep(heartbeatInterval);
+                        }catch(InterruptedException e){
+                            LOGGER.debug(" new elements are found but we are interrupted {} ", e);
+                        }
+                    }
                 }
-                updatePeerState(response , peer);
-                mayBeAdvanceCommitIndex();
-                networkFailureSleepTime = peerRetryBackoffInitialMs;
+            }catch(Exception e){
+                LOGGER.error("exception in replication loop for peer {} , please check stack trace ", peer, e);
+                try {
+                    Thread.sleep(1000);
+                    break;
+                } catch (InterruptedException e1) {
+                    LOGGER.error("someone disturbed replication loop for peer {} , please check stack trace ", peer, e1);
+                }
             }
             MDC.remove("requestId");
         }
@@ -499,7 +523,7 @@ public class RaftNode{
     private synchronized AppendEntriesRequest getAppendEntriesRequest(String peer){
         int prevIndex = peers.get(peer).getNextIndex() - 1;
         long prevTerm = log.termAt(prevIndex);
-        List<LogEntry> list = log.getFrom(prevIndex + 1);
+        List<LogEntry> list = log.getFrom(prevIndex + 1, maxEntriesPerRequest);
         // because leaderId can be null or stale values so its better touse nodeId
         return new AppendEntriesRequest(currentTerm , nodeId , prevIndex, prevTerm, commitIndex , list);
     }
@@ -523,13 +547,25 @@ public class RaftNode{
         String peerAddress = peer;
         int nextMatchIndex = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getMatchIndex() : ((InstallSnapshotResponse)response).getAppliedIndex();
         boolean success  = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).isSuccess() : ((InstallSnapshotResponse)response).isSuccess();
+        int conflictTermFirstIndex = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getConflictTermFirstIndex() : -1;
+        long conflictTerm = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getConflictTerm() : -1;
         PeerState state = peers.get(peerAddress);
         LOGGER.debug("term {} and node id {} updating peer {} state {} ", currentTerm, nodeId, peer, state);
         LOGGER.debug("term {} and node id {} match index {} next index {} success {} ", currentTerm, nodeId, state.getMatchIndex(), state.getNextIndex(), success);
         LOGGER.debug("term {} and node id {} response {} ", currentTerm, nodeId, response);
         if(nextMatchIndex > state.getMatchIndex()) state.setMatchIndex(nextMatchIndex);
         if(success) state.setNextIndex(state.getMatchIndex() + 1);
-        else if(state.getNextIndex() > 1 ) state.setNextIndex(state.getMatchIndex() + 1);
+        else if(state.getNextIndex() > 1 ) {
+            if(response instanceof AppendEntriesResponse && conflictTermFirstIndex != -1 && conflictTerm != -1){
+                if(log.termAt(conflictTermFirstIndex) == conflictTerm && conflictTermFirstIndex <= log.lastIndex() && conflictTermFirstIndex >= log.getLastIncludedIndex()){
+                    state.setNextIndex(conflictTermFirstIndex);
+                }else{
+                    state.setNextIndex(state.getMatchIndex() + 1);
+                }
+            }else{
+                state.setNextIndex(state.getMatchIndex() + 1);
+            }
+        }
 
     }
     // this method shouldn't be synchronized because we are using virtual threads to replicate the log and we dont want to block the main thread
@@ -628,7 +664,15 @@ public class RaftNode{
                 // whether the node which is asking for appending entry has updated log 
                 if(!log.hasMatchAt(request.getPrevLogIndex() , request.getPrevLogTerm())){
                     LOGGER.debug("i guess we are returnig from here");
-                    response.setSuccess(false);
+                    if(request.getPrevLogIndex() > log.lastIndex()){
+                        // no conflict term only conflict index 
+                        response.setConflictTermFirstIndex(log.lastIndex() + 1);
+                    }else{
+                        long conflictTerm = log.termAt(request.getPrevLogIndex());
+                        int conflictTermFirstIndex = log.getFirstIndex(conflictTerm, request.getPrevLogIndex());
+                        response.setConflictTermFirstIndex(conflictTermFirstIndex);
+                        response.setConflictTerm(conflictTerm);
+                    }
                     return response;
                 }
                 // if the node which is asking us to append entry has updated log then we can safely append it in our log
@@ -665,7 +709,7 @@ public class RaftNode{
                 try{
                     long t0 = System.nanoTime();
                     walfuture.get(5 , TimeUnit.SECONDS);
-                    LOGGER.info("METRIC wal_append waitUs={} entries={}", TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t0), request.getEntries().size());
+                    METRICS.info("METRIC wal_append waitUs={} entries={}", TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t0), request.getEntries().size());
                 }catch(Exception e){
                     LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
                         "while appending entry to wal , please check stack trace ", e);
@@ -707,6 +751,8 @@ public class RaftNode{
         response.setTerm(currentTerm);
         response.setFollowerId(nodeId);
         response.setMatchIndex(commitIndex);
+        response.setConflictTermFirstIndex(-1);
+        response.setConflictTerm(-1);
         return response;
 
     }
@@ -726,14 +772,24 @@ public class RaftNode{
         LOGGER.debug("Install snapshot request is {} ", request);
         InstallSnapshotResponse response = buildInstallSnapshotResponse();
         synchronized(this){
-            if(request.getTerm() < currentTerm || request.getLastIncludedIndex() <= lastApplied){
-                LOGGER.debug("NACK Install snapshot request as term {} is less than current term {} or lastApplied {} is less than lastIncludedIndex {} ", request.getTerm(), currentTerm, lastApplied, request.getLastIncludedIndex());
+            // now the node who is asking for votes has seen more term than us, it means it can be updated but we have to check that
+            if(request.getTerm() < currentTerm){
+                LOGGER.debug("term {} node id {} install snapshot request is less than current term {} ", request.getTerm(), nodeId, currentTerm);
                 return response;
             }
-            // now the node who is asking for votes has seen more term than us, it means it can be updated but we have to check that
             if(request.getTerm() > currentTerm){
                 stepDownDueToHigherTerm(request.getTerm());
                 response.setTerm(request.getTerm());
+            }
+
+            transitionToFollower();
+            leaderId = request.getLeaderId();
+            resetElectionTimer();
+            
+            if(request.getLastIncludedIndex() <= lastApplied){
+                LOGGER.debug("NACK Install snapshot request as term {} is less than current term {} or lastApplied {} is less than lastIncludedIndex {} ", request.getTerm(), currentTerm, lastApplied, request.getLastIncludedIndex());
+                response.setAppliedIndex(lastApplied);
+                return response;
             }
             final Map<String, CacheItem> cacheState = request.getCacheState();
             Map<String , String> saved = MDC.getCopyOfContextMap();
@@ -823,11 +879,13 @@ public class RaftNode{
             }
 
             
-            synchronized(this){
-                try{
-                    walfuture.get(5 , TimeUnit.SECONDS);
-                }catch(Exception e){
-                    log.remove(log.size() - 1);
+            try{
+                walfuture.get(5 , TimeUnit.SECONDS);
+            }catch(Exception e){
+                synchronized(this){
+                    int index = logEntry.getIndex();
+                    log.remove(index);
+                    pendingRequests.remove(index);
                     LOGGER.error("Couldn't append entry to log :( , please check stack trace ", e);
                     future.completeExceptionally(e);
                     return future;
@@ -923,10 +981,12 @@ public class RaftNode{
                     Command command = Command.deserialize(entry.getCommand());
                     try{
                         response = CommandProcessor.process(command, cache);
-                    }catch(Exception e){
-                        LOGGER.error("print stacktrace", e);
-            
+                    } catch (Exception e) {
+                        LOGGER.error("failed to apply command at index {} : {} - {}",
+                                    lastApplied, e.getClass().getSimpleName(), e.getMessage());
+                        LOGGER.debug("stack trace for failed apply at index {}", lastApplied, e);
                     }
+
             
                 }
                 CompletableFuture<String> future = pendingRequests.remove(lastApplied);

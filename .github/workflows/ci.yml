@@ -19,4 +19,4 @@ jobs:
           cache: maven
 
       - name: Build and test
-        run: mvn -B clean test
+        run: mvn -B clean verify

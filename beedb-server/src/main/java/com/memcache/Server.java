@@ -42,9 +42,8 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
-import java.util.Arrays;
 import java.util.ArrayList;
-public class Server {
+public class Server implements AutoCloseable{
 
     ConcurrentLinkedQueue<Map.Entry<SelectionKey, ByteBuffer>> pendingWrites = new ConcurrentLinkedQueue<>();
     RaftNode  raftNode;
@@ -60,6 +59,7 @@ public class Server {
         Properties properties = new Properties();
         try(
             FileInputStream fileInputStream = new FileInputStream(fileName);
+            Server server = new Server();
         ){
             properties.load(fileInputStream);
             
@@ -69,6 +69,7 @@ public class Server {
             }
             // if properties values are absent then we use default values
 
+            Runtime.getRuntime().addShutdownHook(new Thread(server::close));
             String nodeId = properties.getProperty("nodeId", "node1");
             int clientPort = Integer.parseInt(properties.getProperty("clientPort"));
             int raftPort = Integer.parseInt(properties.getProperty("raftPort"));
@@ -76,35 +77,47 @@ public class Server {
             String snapshotDir = properties.getProperty("snapshotDir" , "snapshot");
             String tmpDir = properties.getProperty("tmpDir" , "tmp");
             String walDir = properties.getProperty("walDir", "wal");
-            int snapShotLimit = Integer.parseInt(properties.getProperty("snapShotLimit", "1000"));
-            int snapShotThreshold = Integer.parseInt(properties.getProperty("snapShotThreshold", "1000"));
-            int minElectionTimeout = Integer.parseInt(properties.getProperty("minElectionTimeout", "150"));
-            int maxElectionTimeout = Integer.parseInt(properties.getProperty("maxElectionTimeout", "300"));
-            int heartbeatInterval = Integer.parseInt(properties.getProperty("heartbeatInterval", "100"));
-            int peerRetryBackoffInitialMs = Integer.parseInt(properties.getProperty("peerRetryBackoffInitialMs", "200"));
-            int peerRetryBackoffMaxMs = Integer.parseInt(properties.getProperty("peerRetryBackoffMaxMs", "1000"));
+            int snapShotLimit = intProperty(properties, "snapShotLimit", 1000);
+            int snapShotThreshold = intProperty(properties, "snapShotThreshold", 1000);
+            int minElectionTimeout = intProperty(properties, "electionTimeoutMinMs", 1000);
+            int maxElectionTimeout = intProperty(properties, "electionTimeoutMaxMs", 2000);
+            int heartbeatInterval = intProperty(properties, "heartbeatIntervalMs", 300);
+            int peerRetryBackoffInitialMs = intProperty(properties, "peerRetryBackoffInitialMs", 200);
+            int peerRetryBackoffMaxMs = intProperty(properties, "peerRetryBackoffMaxMs", 1000);
+            LOGGER.info("timing budget: election {}-{}ms, heartbeat {}ms, ratio {}",
+                minElectionTimeout, maxElectionTimeout, heartbeatInterval,
+                String.format("%.1f", minElectionTimeout / (double) heartbeatInterval));
             LOGGER.debug("clientPort is {} and raftPort is {} and peers is {} ", clientPort , raftPort, peers);
             LOGGER.debug("stateDir is {} and snapshotDir is {} and tmpDir is {} and walDir is {} ", stateDir , snapshotDir, tmpDir, walDir);
             LOGGER.debug("snapShotLimit is {} and snapShotThreshold is {} and minElectionTimeout is {} and maxElectionTimeout is {} and heartbeatInterval is {} ", snapShotLimit, snapShotThreshold, minElectionTimeout, maxElectionTimeout, heartbeatInterval);
             if(clientPort == 0 || raftPort == 0 || peers.size() == 0){
                 throw new IllegalArgumentException("clientPort and raftPort must be provided");
             }
-            Server server = new Server();
             server.start(peers, nodeId , clientPort , raftPort, stateDir, snapshotDir, tmpDir, walDir, snapShotLimit, snapShotThreshold, minElectionTimeout, maxElectionTimeout, heartbeatInterval, peerRetryBackoffInitialMs, peerRetryBackoffMaxMs);
-
         }catch(Exception e){
             LOGGER.error("something is wrong {}",e);
+            System.exit(1);
         }
         
     }
     
+    private static int intProperty(Properties properties, String key, int defaultValue) {
+        String raw = properties.getProperty(key);
+        if (raw == null) {
+            LOGGER.warn("property '{}' not set, defaulting to {} -- is the key spelled correctly? :(",
+                        key, defaultValue);
+            return defaultValue;
+        }
+        return Integer.parseInt(raw.trim());
+    }
+
     public void start(ArrayList<String> peers, String nodeId, int clientPort,int raftPort, String stateDir, String snapshotDir, 
-        String tmpDir, String walDir, int snapShotLimit, int snapShotThreshold, int minElectionTimeout, int maxElectionTimeout, int heartbeatInterval , int peerRetryBackoffInitialMs, int peerRetryBackoffMaxMs) throws IOException{
+        String tmpDir, String walDir, int snapShotLimit, int snapShotThreshold, int minElectionTimeout, int maxElectionTimeout, int heartbeatInterval , int peerRetryBackoffInitialMs, int peerRetryBackoffMaxMs) throws IOException, InterruptedException{
         // selector to notify about new connections
         if(peers.size() == 0) throw new IllegalArgumentException("No peers provided");
         if(nodeId == null) throw new IllegalArgumentException("No nodeId provided");
         cache = new Cache();
-        raftTransport = new SocketRaftTransport();
+        raftTransport = new SocketRaftTransport(peers);
         raftNode = new RaftNode(peers, nodeId, cache , raftTransport, stateDir, snapshotDir, tmpDir ,walDir, snapShotLimit, snapShotThreshold, minElectionTimeout, maxElectionTimeout, heartbeatInterval , peerRetryBackoffInitialMs, peerRetryBackoffMaxMs);   
         raftRpcServer = new RaftRpcServer(raftPort, raftNode);
         raftNode.start();
@@ -289,5 +302,9 @@ public class Server {
         }// making selector ready for read operation
         selectionKey.interestOps(SelectionKey.OP_READ);
     }
+
+    public void close(){
+        if(raftRpcServer != null) raftRpcServer.close();
+        if(raftNode != null) raftNode.stop();    }
     
 }

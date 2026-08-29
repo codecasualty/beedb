@@ -60,9 +60,9 @@ public class RaftClusterTest {
         folder.newFolder("logs").getAbsoluteFile();
         walDir = folder.newFolder("wal").getAbsolutePath();
         LOGGER.debug("before creating node state dir is {}", stateDir);
-        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5, 5, 150, 300, 100 , 200, 1000);
-        RaftNode raftNode2 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5, 5, 150, 300, 100 , 200 , 1000);
-        RaftNode raftNode3 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5, 5, 150, 300 , 100 , 200 , 1000);
+        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT, TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode2 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT, TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS , TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode3 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT, TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS , TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS , TestTimings.BACKOFF_MAX_MS);
         raftNodeAddress.put(raftNode1, "localhost:11211");
         raftNodeAddress.put(raftNode2, "localhost:11212");
         raftNodeAddress.put(raftNode3, "localhost:11213");
@@ -397,7 +397,7 @@ public class RaftClusterTest {
         }
 
         // now we bring back our follower, which was thrown out of cluster
-        RaftNode newRaftnode = new RaftNode(nodeToRemove.getPeerAddressList(), nodeToRemove.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100, 200, 1000);
+        RaftNode newRaftnode = new RaftNode(nodeToRemove.getPeerAddressList(), nodeToRemove.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
         raftNodeAddress.put(newRaftnode , addressNodeToRemoveString);
         raftTransport.addRaftNode(addressNodeToRemoveString , newRaftnode );
         raftNodesList.add(newRaftnode);
@@ -595,7 +595,7 @@ public class RaftClusterTest {
         Thread.sleep(500);
         LOGGER.debug("--------------------leader is stopped------------------");
         // now we will spawn a new node and put it in leaders position 
-        RaftNode newNode = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 1000, 1000, 150, 300, 100, 200, 1000);
+        RaftNode newNode = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_NEVER, TestTimings.SNAPSHOT_NEVER, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
         // raftNodeAddress.put(newNode, "localhost:11211");
         // raftTransport.addRaftNode(raftNodeAddress.get(newNode), newNode);
         // raftNodesList.add(newNode);
@@ -771,7 +771,7 @@ public class RaftClusterTest {
         }
         Thread.sleep(500);
         // now we will spawn a new node and put it in leaders position 
-        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100 , 200, 1000);
+        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
 
         // raftNode1.start();
         LOGGER.debug("--------------------new node is reading from wal ------------------");
@@ -832,7 +832,7 @@ public class RaftClusterTest {
         assertEquals(leader.votedFor(), raftState.getVotedFor());
         // now lets start another node with same dirs and assert if the snapshot is restored correctly with correct votedFor and term
         List<String> peerAddress = leader.getPeerAddressList();
-        RaftNode raftNode1 = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir,5,5, 150, 300, 100 , 200, 1000);
+        RaftNode raftNode1 = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir,TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
         assertEquals(leader.getTerm(), raftNode1.getTerm());
         assertEquals(leader.votedFor(), raftNode1.votedFor());
 
@@ -886,7 +886,7 @@ public class RaftClusterTest {
         // now lets bring back our killed node
         List<String> peerAddress = killedNode.getPeerAddressList();
         LOGGER.debug("peer address is {} ", peerAddress);
-        RaftNode raftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100 , 200, 1000);
+        RaftNode raftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
         LOGGER.debug("address of raft node {} is {} ", raftNode.getNodeId(), addressNodeToRemoveString);
         raftNodeAddress.put(raftNode, addressNodeToRemoveString);
         raftNodesList.add(raftNode);
@@ -917,7 +917,7 @@ public class RaftClusterTest {
         raftNodeAddress.remove(raftNode);
         raftNode.stop();
 
-        RaftNode newRaftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, 5,5, 150, 300, 100, 200, 1000);
+        RaftNode newRaftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
         raftNodeAddress.put(newRaftNode, addressNodeToRemoveString);
         raftNodesList.add(newRaftNode);
         raftTransport.addRaftNode(raftNodeAddress.get(newRaftNode), newRaftNode);

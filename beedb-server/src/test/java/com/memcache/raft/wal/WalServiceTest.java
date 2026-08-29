@@ -31,10 +31,12 @@ public class WalServiceTest {
     private WalService walService;
     private Logger LOGGER = LoggerFactory.getLogger(WalServiceTest.class.getName());
     private String walPath;
+    private String tmpDir;
     @Before
     public void setUp() throws Exception {
         walPath = folder.newFile("wal.log").getAbsolutePath();
-        walService = new WalService(walPath);
+        tmpDir  = folder.toString();
+        walService = new WalService(walPath, tmpDir);
     }
 
     /*

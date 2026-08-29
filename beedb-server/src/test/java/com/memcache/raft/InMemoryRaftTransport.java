@@ -33,13 +33,14 @@ public class InMemoryRaftTransport implements RaftTransport {
     }
 
     @Override
-    public RequestVoteResponse sendRequestVoteToPeer(RequestVoteRequest request, String peer) {
+    public RpcResult<RequestVoteResponse> sendRequestVoteToPeer(RequestVoteRequest request, String peer) {
         Map<String , String> saved = MDC.getCopyOfContextMap();
         LOGGER.debug("Request Vote Req by node {} to peer{} request is {} ", request.getCandidateId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
         try{
-            if(raftNode == null || raftNode.serviceShuttingDown()) return null;
-            return raftNode.handleRequestVote(request);
+            if(raftNode == null || raftNode.serviceShuttingDown()) return RpcResult.unreachable("Server Shutting Down");
+            RequestVoteResponse response = raftNode.handleRequestVote(request);
+            return RpcResult.ok(response);
         }finally{
             if(saved != null) MDC.setContextMap(saved);
             else MDC.clear();
@@ -48,13 +49,14 @@ public class InMemoryRaftTransport implements RaftTransport {
      
 
     @Override
-    public AppendEntriesResponse sendAppendEntriesToPeer(AppendEntriesRequest request, String peer) {
+    public RpcResult<AppendEntriesResponse> sendAppendEntriesToPeer(AppendEntriesRequest request, String peer) {
         Map<String , String> saved = MDC.getCopyOfContextMap();
         LOGGER.debug("Append Entry Req by node {} to peer{} request is {} ", request.getLeaderId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
         try{
-            if(raftNode == null || raftNode.serviceShuttingDown()) return null;
-            return raftNode.handleAppendEntries(request);
+            if(raftNode == null || raftNode.serviceShuttingDown()) return RpcResult.unreachable("Server Shutting Down");
+            AppendEntriesResponse response = raftNode.handleAppendEntries(request);
+            return RpcResult.ok(response);
         }finally{
             if(saved != null) MDC.setContextMap(saved);
             else MDC.clear();
@@ -62,13 +64,14 @@ public class InMemoryRaftTransport implements RaftTransport {
     }
 
     @Override
-    public InstallSnapshotResponse sendInstallSnapshotToPeer(InstallSnapshotRequest request, String peer) {
+    public RpcResult<InstallSnapshotResponse> sendInstallSnapshotToPeer(InstallSnapshotRequest request, String peer) {
         Map<String , String> saved = MDC.getCopyOfContextMap();
         LOGGER.debug("Install Snapshot Req by node {} to peer{} request is {} ", request.getLeaderId() , peer, request);
         RaftNode raftNode = raftNodes.get(peer);
         try{
-            if(raftNode == null || raftNode.serviceShuttingDown()) return null;
-            return raftNode.handleInstallSnapshot(request);
+            if(raftNode == null || raftNode.serviceShuttingDown()) return RpcResult.unreachable("Server Shutting Down");
+            InstallSnapshotResponse response = raftNode.handleInstallSnapshot(request);
+            return RpcResult.ok(response);
         }finally{
             if(saved != null) MDC.setContextMap(saved);
             else MDC.clear();
