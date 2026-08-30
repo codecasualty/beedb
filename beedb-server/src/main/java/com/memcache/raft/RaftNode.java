@@ -6,12 +6,14 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.ArrayList;
@@ -99,7 +101,7 @@ public class RaftNode{
     private          int     snapShotThreshold = 1000;
     private          int     snapShotLimit = 1000;
     private final    int     maxEntriesPerRequest = 50;
-
+    private          int     persistedWalIndex;
     private int minElectionTimeout;
     private int maxElectionTimeout;
     private int heartbeatInterval;
@@ -164,6 +166,10 @@ public class RaftNode{
         this.log.appendAll(this.walService.replayFrom(lastApplied));
         this.applyExecutor.submit(wrapRunnableWithMdc(this::applyCommitedEntries));
         inProgress = false;
+        // note its last index() not last applied, because once our node start fresh then both log last index and last applied are same
+        // but when we restart then they will drift, last applied will denote how many entries we have applied to our cache, before restart
+        // but last index will denote how many entries in wal are present and now are in our raftlog as well, and can be applied to our cache
+        this.persistedWalIndex = log.lastIndex();
 
         LOGGER.info("in raft node constructor lastApplied {} commit index {}  current term {} voted for {} ", lastApplied, commitIndex, currentTerm, votedFor);
     }
@@ -508,7 +514,7 @@ public class RaftNode{
         int majorityMatchIndex = matchIndex[matchIndex.length / 2];
         // if more than half of the nodes have commit index greater than ours and they are in same term then we can advance our commit index
         if(majorityMatchIndex > log.getFirstIndex() && majorityMatchIndex > commitIndex && log.termAt(majorityMatchIndex) == currentTerm){
-            commitIndex = majorityMatchIndex;
+            commitIndex = Math.min(majorityMatchIndex, persistedWalIndex);
             LOGGER.debug("term {} node id {} advanced commit index {} ", currentTerm, nodeId, commitIndex);
             // to wake up apply thread ,as we have moved our commit index, therefore rest of entries should be applied to cache.
             this.notifyAll();
@@ -724,8 +730,12 @@ public class RaftNode{
                 }
             
                 // as we have updated our log , we need to move/change our commit index as well
-                if(request.getLeaderCommit() > commitIndex)
+                if(request.getLeaderCommit() > commitIndex){
                     commitIndex = Math.min(request.getLeaderCommit() , log.lastIndex());
+                }
+                // because we are sure our wal succeeded and persisted wal idnex denotes which/how many entries are successfully persisted in wal
+                // and in this case the las log index denotes the same
+                persistedWalIndex = log.lastIndex();
         
                 // using apply executor to apply entrires in cache , this is single threaded executor because we dont want multiple
                 // threads trying to change cache state as order of opeartions are importnat.
@@ -815,6 +825,8 @@ public class RaftNode{
                         response.setAppliedIndex(request.getLastIncludedIndex());
                         response.setTerm(currentTerm);
                         response.setSuccess(true);
+                        persistedWalIndex = log.lastIndex();
+
 
                     }
                 }
@@ -881,10 +893,24 @@ public class RaftNode{
             
             try{
                 walfuture.get(5 , TimeUnit.SECONDS);
+                synchronized(this){
+                    // we need max on this because we dont want to go in backwards direction , if wal for entry 4 succeeded then wal for 
+                    // 1,2,3 will succeed, just because response of wal future 1 came back later does not imply persisted wal index is 1
+                    persistedWalIndex = Math.max(persistedWalIndex, logEntry.getIndex());
+                }
+            }catch(TimeoutException | InterruptedException e){
+                // this means we will have entry in wal and we have entry in raftlog, but wal is not done yet
+                // we cant delete raft log entry because was entry will succeed 
+                // but this means get on same key k might succeed, yeah raft never gurantees anything about failed writes
+                // it only says if that entry is stored then no way we are going to loose that entry.
+                // future.completeExceptionally(e);
+                // return future;
+                // dont return here, let replicatino loop know we have new entry it can start replicating
+                LOGGER.debug("time out exception in wal future ");
             }catch(Exception e){
                 synchronized(this){
                     int index = logEntry.getIndex();
-                    log.remove(index);
+                    log.truncateFrom(persistedWalIndex + 1);
                     pendingRequests.remove(index);
                     LOGGER.error("Couldn't append entry to log :( , please check stack trace ", e);
                     future.completeExceptionally(e);

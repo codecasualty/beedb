@@ -219,6 +219,10 @@ public class WalService {
             print(tempFileChannel);
             tempFileChannel.force(true);
             tempFileChannel.close();
+
+            try (FileChannel dir = FileChannel.open(tmpPath, StandardOpenOption.READ)) {
+                dir.force(true);
+            }
             // Thread.sleep(100);
             // FileChannel duplicateFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.READ, StandardOpenOption.WRITE);
             // LOGGER.debug("printing duplicate file channel after temp file is forced");
