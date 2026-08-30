@@ -4,9 +4,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Set;
@@ -77,6 +79,10 @@ public class RaftSnapshotManager {
             bw.write(json);
             bw.flush();
             fos.getFD().sync();
+            // below lines make sure parent directory metadata is updated
+            try (FileChannel dir = FileChannel.open(Path.of(destFolderPath), StandardOpenOption.READ)) {
+                dir.force(true);
+            }
             LOGGER.debug("we have written json to file at {} ", tempFilePath);
             try{
                 LOGGER.debug("moving file from {} to {}", tempFilePath, destFilepath);
