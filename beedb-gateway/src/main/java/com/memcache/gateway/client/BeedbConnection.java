@@ -35,7 +35,7 @@ class BeedbConnection {
 
     public String getStats() throws IOException{
         String command = "stats\r\n";
-        byte[] bytes = command.getBytes(StandardCharsets.StandardCharsets.UTF_8);
+        byte[] bytes = command.getBytes(StandardCharsets.UTF_8);
         bufferedOutputStream.write(bytes);
         bufferedOutputStream.flush();
         // our response will end with \r\nEND so we have to read till that point
@@ -66,8 +66,8 @@ class BeedbConnection {
         }else{
             int length = Integer.parseInt(headerParts[3]);
             // String value = new String(bufferedReader.readNBytes(length));
-            byte[] buffer = readNBytes(length , bufferedInputStream);
-            String value = new String(buffer, StandardCharsets.StandardCharsets.UTF_8);
+            byte[] buffer = bufferedInputStream.readNBytes(length);
+            String value = new String(buffer, StandardCharsets.UTF_8);
             LOGGER.debug(" string read is {}", value);
             // LOGGER.debug(value);
             // for END\r\n one extra read line is required
@@ -108,16 +108,6 @@ class BeedbConnection {
         socket.close();
     }
 
-    public byte[] readNBytes(int n , BufferedInputStream bufferedInputStream) throws IOException{
-        byte[] buffer = new byte[n];
-        try{
-            bufferedInputStream.read(buffer, 0, n);
-        }catch(Exception e){
-            LOGGER.error("readNBytes threw exception ", e);
-        }
-        return buffer;
-    }
-
     public String readLine(BufferedInputStream bufferedInputStream) {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         while(true){
@@ -130,7 +120,9 @@ class BeedbConnection {
                 break;
             }
         }
-        return baos.toString();
+        byte[] buffer = baos.toByteArray();
+        if(buffer.length > 0 && buffer[buffer.length-1] == '\r')return new String(buffer, 0, buffer.length-1, StandardCharsets.UTF_8);
+        return new String(buffer, StandardCharsets.UTF_8);
     }
 
 }
