@@ -80,14 +80,14 @@ public class RaftSnapshotManager {
             bw.flush();
             fos.getFD().sync();
             // below lines make sure parent directory metadata is updated
-            try (FileChannel dir = FileChannel.open(Path.of(destFolderPath), StandardOpenOption.READ)) {
-                dir.force(true);
-            }
             LOGGER.debug("we have written json to file at {} ", tempFilePath);
             try{
                 LOGGER.debug("moving file from {} to {}", tempFilePath, destFilepath);
                 LOGGER.debug("snapshotted data is {} ", json);
                 Files.move(Path.of(tempFilePath), Path.of(destFilepath), StandardCopyOption.ATOMIC_MOVE);
+                try (FileChannel dir = FileChannel.open(Path.of(destFolderPath), StandardOpenOption.READ)) {
+                    dir.force(true);
+                }
                 // /tmp/junit1685153358943795016/snapshots/node2/snapshot.snap 
                 LOGGER.debug("snapshotting is done successfully and destFile path is {}", destFilepath);
                 SNAPSHOT_FILE_PATH = destFilepath;

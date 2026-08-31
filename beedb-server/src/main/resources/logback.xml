@@ -17,7 +17,7 @@
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/${NODE}.log</file>
         <!-- batch writes instead of a syscall per line -->
-        <immediateFlush>false</immediateFlush>
+        <immediateFlush>true</immediateFlush>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>logs/${NODE}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
             <maxFileSize>50MB</maxFileSize>
