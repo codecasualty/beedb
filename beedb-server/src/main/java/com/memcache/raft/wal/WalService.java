@@ -220,9 +220,6 @@ public class WalService {
             tempFileChannel.force(true);
             tempFileChannel.close();
 
-            try (FileChannel dir = FileChannel.open(tmpPath, StandardOpenOption.READ)) {
-                dir.force(true);
-            }
             // Thread.sleep(100);
             // FileChannel duplicateFileChannel = FileChannel.open(Path.of(tempFilePath), StandardOpenOption.READ, StandardOpenOption.WRITE);
             // LOGGER.debug("printing duplicate file channel after temp file is forced");
@@ -232,6 +229,9 @@ public class WalService {
             // LOGGER.debug("moving file from {} to {}", sourcePath, targetPath);
             Files.move(sourcePath, targetPath, StandardCopyOption.ATOMIC_MOVE);
             // LOGGER.debug("file moved ");
+            try (FileChannel dir = FileChannel.open(targetPath.getParent(), StandardOpenOption.READ)) {
+                dir.force(true);
+            }
             walFileChannel.close();
             // once we are opening an file channel , by default it will start reading from the beginning of the file
             walFileChannel = FileChannel.open(Path.of(walFilePath),StandardOpenOption.READ, StandardOpenOption.WRITE);

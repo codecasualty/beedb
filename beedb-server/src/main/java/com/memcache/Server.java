@@ -226,6 +226,7 @@ public class Server implements AutoCloseable{
         executorService.execute(() -> {
             try{
                 byte[] response = processRequest(cmd);
+                LOGGER.info("response which is sent is {}", new String(response));
                 sendResponse(key, response, selector);
             }catch (Exception e){
                 // TODO: handle exception
@@ -265,6 +266,8 @@ public class Server implements AutoCloseable{
                 return response.toProtocolString().getBytes();
             }
             else{
+                LOGGER.info("command type is {}", command.getType());
+                LOGGER.info("command is {}", command);
                 // we have to propose this command to raft node
                 // and get the output future from propose method
                 Future<String> future = raftNode.propose(command.serialize());

@@ -31,10 +31,6 @@ import com.memcache.command.CommandType;
  *   If the client was told STORED, the value is still there afterwards --
  *   no matter what died in between.
  *
- * Everything else in this project (throughput, election counts, batch sizes) is
- * a number that can be better or worse. This is the one that is either true or
- * the database is broken.
- *
  * The distinction that makes the test meaningful is between an ACKNOWLEDGED
  * write and an ATTEMPTED one. Raft promises nothing about a write whose future
  * completed exceptionally or timed out -- that entry may or may not be in the
@@ -118,14 +114,27 @@ public class DurabilityIT {
     /**
      * Stop all three nodes and bring them back against the same on-disk state.
      *
-     * This one targets DURABILITY specifically rather than availability. With a
-     * single node killed, an acknowledged write can survive purely in another
-     * node's memory and the test would still pass with a broken WAL. Killing
-     * everything removes that hiding place: the only way an acked write comes
-     * back is if it was actually fsynced somewhere before the ack.
+     * This one targets DURABILITY rather than availability. With a single node
+     * killed, an acknowledged write can survive purely in another node's memory
+     * and the test would still pass with a broken WAL. Killing all three removes
+     * that hiding place: an acked write can only come back by being replayed
+     * from a WAL on disk.
      *
-     * This is the test that fails if commitIndex is ever allowed to advance past
-     * what the leader has persisted.
+     * WHAT THIS DOES NOT PROVE -- read this before quoting the test.
+     *
+     * It proves LOGICAL durability: no acknowledged write is lost to truncation
+     * bugs, commit-index errors, log reconciliation, or a broken replay path.
+     *
+     * It does NOT prove PHYSICAL durability, i.e. that fsync happened before the
+     * acknowledgement. stopNode() shuts threads down in-process; there is no JVM
+     * kill and no power loss, so anything written but not force()ed is still in
+     * the OS page cache, which outlives a process. This test would still pass
+     * with force(true) deleted from WalService.
+     *
+     * Closing that gap needs a WalService test double that DISCARDS unforced
+     * writes on "crash" -- which in turn needs WalService to be injectable into
+     * RaftNode instead of constructed by it. Until then, claim the logical
+     * property and not the physical one.
      */
     @Test
     public void acknowledgedWritesSurviveFullClusterRestart() throws Exception {
