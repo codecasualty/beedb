@@ -6,6 +6,17 @@
 package com.memcache.gateway.client;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.memcache.gateway.client.beedbexception.BeedbException;
+import com.memcache.gateway.client.beedbexception.BeedbTimeoutException;
+import com.memcache.gateway.client.beedbexception.NoLeaderException;
+import com.memcache.gateway.client.beedbexception.NodeUnreachableException;
+
+import java.io.IOException;
+import java.net.ConnectException;
+import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.util.Map;
 public class BeedbClient {
 
@@ -21,74 +32,15 @@ public class BeedbClient {
     }
 
     public String get(String key){
-        if(leaderAddressString == null || leaderAddressString.isEmpty()){
-            leaderAddressString = getleaderAddressString();
-        }
-        String response = null;
-        BeedbConnection connection = null;
-        try{
-            connection = pool.getConnection(leaderAddressString);
-            response = connection.getValue(key);
-            pool.putConnection(leaderAddressString, connection);
-        }catch(Exception e){
-            leaderAddressString = null;
-            LOGGER.error("something is wrong ",e);
-            pool.closeConnection(connection);
-        }
-        
-        return response;
+        return execute("get", connection -> connection.getValue(key));
     }
 
     public String set(String key, String value){
-        if(leaderAddressString == null || leaderAddressString.isEmpty()){
-            leaderAddressString = getleaderAddressString();
-        }
-        BeedbConnection connection = null;
-        String response = null;
-        try{
-            connection = pool.getConnection(leaderAddressString);
-            response = connection.setValue(key, value);
-            if(response != null && response.startsWith("SERVER_ERROR")){
-                pool.putConnection(leaderAddressString, connection);
-                leaderAddressString = getleaderAddressString();
-                connection = pool.getConnection(leaderAddressString);
-                response = connection.setValue(key, value);
-            }
-            pool.putConnection(leaderAddressString, connection);
-        
-        }catch(Exception e){
-            leaderAddressString = null;
-            LOGGER.error("something is wrong ",e);
-            pool.closeConnection(connection);
-        }
-        
-        return response;
+        return execute("set", connection -> connection.setValue(key, value));
     }
 
     public String delete(String key){
-        if(leaderAddressString == null || leaderAddressString.isEmpty()){
-            leaderAddressString = getleaderAddressString();
-        }
-        BeedbConnection connection = null;
-        String response = null;
-        try{
-            connection = pool.getConnection(leaderAddressString);
-            response = connection.deleteValue(key);
-            if(response != null && response.startsWith("SERVER_ERROR")){
-                pool.putConnection(leaderAddressString, connection);
-                leaderAddressString = getleaderAddressString();
-                connection = pool.getConnection(leaderAddressString);
-                response = connection.deleteValue(key);
-            }
-            pool.putConnection(leaderAddressString, connection);
-            
-        }catch(Exception e){
-            leaderAddressString = null;
-            LOGGER.error("something is wrong ",e);
-            pool.closeConnection(connection);
-        }
-        
-        return response;
+        return execute("delete", connection -> connection.deleteValue(key));
     }
 
 
@@ -100,13 +52,13 @@ public class BeedbClient {
             response = connection.getStats();
             pool.putConnection(address, connection);
         }catch(Exception e){
-            LOGGER.error("something is wrong ",e);
+            logFailure("stats", address, e);
             pool.closeConnection(connection);
         }
         return response;
     }
 
-    public String getleaderAddressString(){
+    public String getleaderAddressString() throws NoLeaderException{
         String response = null;
         String leaderAdd = null;
         int retryCount = 0;
@@ -127,13 +79,85 @@ public class BeedbClient {
             try{
                 Thread.sleep(1000);
             }catch(Exception e){
-                LOGGER.error("something is wrong ",e);
+                Thread.currentThread().interrupt();
+                LOGGER.warn("interrupted while waiting to re-resolve the leader");
+                break;
             }   
         }
         if(leaderAdd != null) leaderAddressString = nodes.get(leaderAdd);
-        return leaderAdd != null ? nodes.get(leaderAdd) : "NO LEADER";
+        if(leaderAdd == null) throw new NoLeaderException("no leader found in the cluster" );
+        else return leaderAddressString;
     }
 
     
 
+
+    /**
+     *
+     * A ConnectException to a node that has just died, or a read timeout under load,
+     * is EXPECTED -- we already know why it happened, so a stack trace adds nothing
+     * and costs a lot.
+     *
+     * Anything else is genuinely unknown, and there the trace is the only thing that
+     * tells you what happened -- so that one keeps ERROR + trace.
+     *
+     * In SLF4J a Throwable passed as the LAST argument with no matching {} is what
+     * triggers the stack trace; passing e.getMessage() instead keeps it to one line.
+     */
+    private void logFailure(String operation, String address, Exception e){
+        if(e instanceof java.net.ConnectException){
+            LOGGER.warn("{} failed: node {} is unreachable ({})", operation, address, e.getMessage());
+        }else if(e instanceof java.net.SocketTimeoutException){
+            LOGGER.warn("{} failed: node {} timed out ({})", operation, address, e.getMessage());
+        }else{
+            LOGGER.error("{} failed unexpectedly against node {}", operation, address, e);
+        }
+    }
+
+    private String execute(String operation, BeedbOperation operationFunction){
+        BeedbConnection connection = null;
+        String response = null;
+        try{
+            if(leaderAddressString == null || leaderAddressString.isEmpty()){
+                leaderAddressString = getleaderAddressString();
+            }
+            connection = pool.getConnection(leaderAddressString);
+            response = operationFunction.apply(connection);
+            if(response != null && response.startsWith("SERVER_ERROR")){
+                pool.putConnection(leaderAddressString, connection);
+                leaderAddressString = getleaderAddressString();
+                connection = pool.getConnection(leaderAddressString);
+                response = operationFunction.apply(connection);
+            }
+            pool.putConnection(leaderAddressString, connection);
+            
+        }catch(Exception e){
+            logFailure("delete", leaderAddressString, e);
+            // A connection-level failure means this node may no longer be the leader
+            // (or may be gone). Drop the cached address so the next call re-resolves;
+            // without this the client dials a dead node forever.
+            String leaderAdd = leaderAddressString;
+            leaderAddressString = null;
+            pool.closeConnection(connection);
+            throw translate(operation , leaderAdd , e);
+        }
+        
+        return response;
+    }
+
+    private BeedbException translate(String operation, String leaderAdd, Exception e){
+        if(e instanceof BeedbException){
+            return (BeedbException) e;
+        }
+        else if(e instanceof SocketException){
+            return new BeedbException(operation+" failed on "+leaderAdd, e);
+        }
+        else if(e instanceof ConnectException){
+            return new NodeUnreachableException("node " + leaderAdd + " unreachable" , e);
+        }else if(e instanceof SocketTimeoutException){
+            return new BeedbTimeoutException(operation + " failed due to timeout on "+leaderAdd , e);
+        }
+        return new BeedbException(operation+" failed on "+leaderAdd, e);
+        
+    }
 }
