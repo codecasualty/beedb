@@ -60,18 +60,15 @@ public class RaftClusterTest {
         folder.newFolder("logs").getAbsoluteFile();
         walDir = folder.newFolder("wal").getAbsolutePath();
         LOGGER.debug("before creating node state dir is {}", stateDir);
-        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT, TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
-        RaftNode raftNode2 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11213"), "node2", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT, TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS , TestTimings.BACKOFF_MAX_MS);
-        RaftNode raftNode3 = new RaftNode(Arrays.asList( "localhost:11211", "localhost:11212"), "node3", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT, TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS , TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS , TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode1 = newTrackedNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1");
+        RaftNode raftNode2 = newTrackedNode(Arrays.asList( "localhost:11211", "localhost:11213"), "node2");
+        RaftNode raftNode3 = newTrackedNode(Arrays.asList( "localhost:11211", "localhost:11212"), "node3");
         raftNodeAddress.put(raftNode1, "localhost:11211");
         raftNodeAddress.put(raftNode2, "localhost:11212");
         raftNodeAddress.put(raftNode3, "localhost:11213");
         raftTransport.addRaftNode("localhost:11211", raftNode1);
         raftTransport.addRaftNode("localhost:11212", raftNode2);
         raftTransport.addRaftNode("localhost:11213", raftNode3);
-        raftNodesList.add(raftNode1);
-        raftNodesList.add(raftNode2);
-        raftNodesList.add(raftNode3);
         raftNode1.start();
         raftNode2.start();
         raftNode3.start();
@@ -81,12 +78,50 @@ public class RaftClusterTest {
 
     @After
     public void tearDown(){
+        // One node that survives teardown keeps a scheduler campaigning for elections
+        // and a WAL writer fsyncing for the REST OF THE SUITE. Locally there are enough
+        // cores to absorb that; on a 2-core CI runner it starves the timing-sensitive
+        // tests and they fail intermittently. So: stop everything, and never let one
+        // failure skip the rest.
         for(RaftNode node : raftNodesList){
-            node.stop();
+            try{
+                node.stop();
+            }catch(Exception e){
+                LOGGER.debug("stopping node {} threw, continuing teardown", node.getNodeId(), e);
+            }
         }
         raftNodesList.clear();
         raftTransport = null;
         raftNodeAddress.clear();
+    }
+
+    /**
+     * Build a RaftNode AND register it for teardown.
+     *
+     * Always use this instead of `new RaftNode(...)` in a test. Three tests called the
+     * constructor directly and never added the result to raftNodesList, so those nodes
+     * ran until the JVM exited. Note it leaks even if you never call start(): the
+     * constructor alone spins up the WAL writer thread.
+     *
+     * Registering here rather than at each call site makes the leak impossible rather
+     * than merely fixed.
+     */
+    private RaftNode newTrackedNode(List<String> peers, String nodeId,
+                                    int snapshotLimit, int snapshotThreshold)
+            throws IOException, InterruptedException {
+        RaftNode node = new RaftNode(peers, nodeId, new Cache(), raftTransport,
+                stateDir, snapshotDir, tmpDir, walDir,
+                snapshotLimit, snapshotThreshold,
+                TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS,
+                TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        raftNodesList.add(node);
+        return node;
+    }
+
+    /** Same, with the default snapshot settings. */
+    private RaftNode newTrackedNode(List<String> peers, String nodeId)
+            throws IOException, InterruptedException {
+        return newTrackedNode(peers, nodeId, TestTimings.SNAPSHOT_LIMIT, TestTimings.SNAPSHOT_THRESHOLD);
     }
 
     public void waitForCacheFill(RaftNode node, String key, String value) throws InterruptedException{
@@ -343,7 +378,7 @@ public class RaftClusterTest {
     }
     
     @Test
-    public void shouldFollowerCatchUpAfterRejoin() throws InterruptedException{
+    public void shouldFollowerCatchUpAfterRejoin() throws InterruptedException, IOException{
 
         // here first we will figure out leader and then remove one follower from transport layer,
         // we are not going to kill it , we are just partitioning our network. 
@@ -397,10 +432,9 @@ public class RaftClusterTest {
         }
 
         // now we bring back our follower, which was thrown out of cluster
-        RaftNode newRaftnode = new RaftNode(nodeToRemove.getPeerAddressList(), nodeToRemove.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode newRaftnode = newTrackedNode(nodeToRemove.getPeerAddressList(), nodeToRemove.getNodeId());
         raftNodeAddress.put(newRaftnode , addressNodeToRemoveString);
         raftTransport.addRaftNode(addressNodeToRemoveString , newRaftnode );
-        raftNodesList.add(newRaftnode);
         newRaftnode.start();
         Thread.sleep(1000);
         // now we will wait for 5000 ms because we hvae pushed 10 entires , so those entries should get replicated to follower and we dont want to 
@@ -575,7 +609,7 @@ public class RaftClusterTest {
     }
 
     @Test
-    public void shouldReadWalAfterRestart() throws InterruptedException{
+    public void shouldReadWalAfterRestart() throws InterruptedException, IOException{
 
         RaftNode leader = findLeader();
         List<String> peerAddress = leader.getPeerAddressList();
@@ -595,10 +629,9 @@ public class RaftClusterTest {
         Thread.sleep(500);
         LOGGER.debug("--------------------leader is stopped------------------");
         // now we will spawn a new node and put it in leaders position 
-        RaftNode newNode = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_NEVER, TestTimings.SNAPSHOT_NEVER, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
-        // raftNodeAddress.put(newNode, "localhost:11211");
-        // raftTransport.addRaftNode(raftNodeAddress.get(newNode), newNode);
-        // raftNodesList.add(newNode);
+        RaftNode newNode = newTrackedNode(peerAddress, leader.getNodeId(), TestTimings.SNAPSHOT_NEVER, TestTimings.SNAPSHOT_NEVER);
+        raftNodeAddress.put(newNode, "localhost:11211");
+        raftTransport.addRaftNode(raftNodeAddress.get(newNode), newNode);
         // newNode.start();
         LOGGER.debug("--------------------new node is reading from wal ------------------");
 
@@ -737,7 +770,7 @@ public class RaftClusterTest {
     }
 
     @Test
-    public void shouldRestoreFromSnapshotAfterRestart() throws InterruptedException{
+    public void shouldRestoreFromSnapshotAfterRestart() throws InterruptedException, IOException{
 
         RaftNode leader = findLeader();
         List<CompletableFuture<String>> list = new ArrayList<>();
@@ -771,7 +804,7 @@ public class RaftClusterTest {
         }
         Thread.sleep(500);
         // now we will spawn a new node and put it in leaders position 
-        RaftNode raftNode1 = new RaftNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1", new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode1 = newTrackedNode(Arrays.asList( "localhost:11212", "localhost:11213"), "node1");
 
         // raftNode1.start();
         LOGGER.debug("--------------------new node is reading from wal ------------------");
@@ -808,7 +841,7 @@ public class RaftClusterTest {
     }
 
     @Test
-    public void shouldRestoreTermAndVoteAfterRestart() throws InterruptedException{
+    public void shouldRestoreTermAndVoteAfterRestart() throws InterruptedException, IOException{
         RaftNode leader = findLeader();
         // first we let eleciton settle up and then kill the leader and find out what was saved as term and votedFor
         // and after we start another node with same dirs , we assert if the snapshot is restored correctly with correct votedFor and term
@@ -832,7 +865,7 @@ public class RaftClusterTest {
         assertEquals(leader.votedFor(), raftState.getVotedFor());
         // now lets start another node with same dirs and assert if the snapshot is restored correctly with correct votedFor and term
         List<String> peerAddress = leader.getPeerAddressList();
-        RaftNode raftNode1 = new RaftNode(peerAddress, leader.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir,TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode1 = newTrackedNode(peerAddress, leader.getNodeId());
         assertEquals(leader.getTerm(), raftNode1.getTerm());
         assertEquals(leader.votedFor(), raftNode1.votedFor());
 
@@ -849,7 +882,7 @@ public class RaftClusterTest {
     }
 
     @Test
-    public void shouldRestoreInstalledSnapshotAfterRestart() throws InterruptedException{
+    public void shouldRestoreInstalledSnapshotAfterRestart() throws InterruptedException, IOException{
         // we first find the leader and then remove any one follower and then insert data in cluster,
         // we insert data such that snapshots are created and then bring back killed leader now it must receive snapshots
         // after that we verify snapshots are correctly restored by querying cache and checking logs
@@ -886,10 +919,9 @@ public class RaftClusterTest {
         // now lets bring back our killed node
         List<String> peerAddress = killedNode.getPeerAddressList();
         LOGGER.debug("peer address is {} ", peerAddress);
-        RaftNode raftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS , TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode raftNode = newTrackedNode(peerAddress, killedNode.getNodeId());
         LOGGER.debug("address of raft node {} is {} ", raftNode.getNodeId(), addressNodeToRemoveString);
         raftNodeAddress.put(raftNode, addressNodeToRemoveString);
-        raftNodesList.add(raftNode);
         raftTransport.addRaftNode(raftNodeAddress.get(raftNode), raftNode);
         raftNode.start();
         // wait for new leader election
@@ -917,9 +949,8 @@ public class RaftClusterTest {
         raftNodeAddress.remove(raftNode);
         raftNode.stop();
 
-        RaftNode newRaftNode = new RaftNode(peerAddress, killedNode.getNodeId(), new Cache(), raftTransport, stateDir, snapshotDir, tmpDir, walDir, TestTimings.SNAPSHOT_LIMIT,TestTimings.SNAPSHOT_THRESHOLD, TestTimings.ELECTION_MIN_MS, TestTimings.ELECTION_MAX_MS, TestTimings.HEARTBEAT_MS, TestTimings.BACKOFF_INITIAL_MS, TestTimings.BACKOFF_MAX_MS);
+        RaftNode newRaftNode = newTrackedNode(peerAddress, killedNode.getNodeId());
         raftNodeAddress.put(newRaftNode, addressNodeToRemoveString);
-        raftNodesList.add(newRaftNode);
         raftTransport.addRaftNode(raftNodeAddress.get(newRaftNode), newRaftNode);
         newRaftNode.start();
         temp = 0;
