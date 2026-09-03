@@ -12,9 +12,9 @@ import com.memcache.gateway.client.beedbexception.BeedbTimeoutException;
 import com.memcache.gateway.client.beedbexception.NoLeaderException;
 import com.memcache.gateway.client.beedbexception.NodeUnreachableException;
 
-import java.io.IOException;
+import jakarta.annotation.PreDestroy;
+
 import java.net.ConnectException;
-import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.util.Map;
@@ -105,7 +105,7 @@ public class BeedbClient {
      * triggers the stack trace; passing e.getMessage() instead keeps it to one line.
      */
     private void logFailure(String operation, String address, Exception e){
-        if(e instanceof java.net.ConnectException){
+        if(e instanceof java.net.ConnectException || e instanceof java.net.SocketException){
             LOGGER.warn("{} failed: node {} is unreachable ({})", operation, address, e.getMessage());
         }else if(e instanceof java.net.SocketTimeoutException){
             LOGGER.warn("{} failed: node {} timed out ({})", operation, address, e.getMessage());
@@ -132,7 +132,7 @@ public class BeedbClient {
             pool.putConnection(leaderAddressString, connection);
             
         }catch(Exception e){
-            logFailure("delete", leaderAddressString, e);
+            logFailure(operation, leaderAddressString, e);
             // A connection-level failure means this node may no longer be the leader
             // (or may be gone). Drop the cached address so the next call re-resolves;
             // without this the client dials a dead node forever.
@@ -149,15 +149,17 @@ public class BeedbClient {
         if(e instanceof BeedbException){
             return (BeedbException) e;
         }
-        else if(e instanceof SocketException){
-            return new BeedbException(operation+" failed on "+leaderAdd, e);
-        }
-        else if(e instanceof ConnectException){
+        else if(e instanceof ConnectException || e instanceof SocketException){
             return new NodeUnreachableException("node " + leaderAdd + " unreachable" , e);
         }else if(e instanceof SocketTimeoutException){
             return new BeedbTimeoutException(operation + " failed due to timeout on "+leaderAdd , e);
         }
         return new BeedbException(operation+" failed on "+leaderAdd, e);
         
+    }
+
+    @PreDestroy 
+    public void close(){
+        pool.closeAllConnections();
     }
 }
