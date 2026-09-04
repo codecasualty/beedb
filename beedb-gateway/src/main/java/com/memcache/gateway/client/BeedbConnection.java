@@ -46,27 +46,26 @@ class BeedbConnection {
         // our response will end with \r\nEND so we have to read till that point
         StringBuilder builder = new StringBuilder();
         String header = readLine(bufferedInputStream);
-        if(header == null)return null;
-        String[] headerParts = header.split(" ");
-        if(headerParts.length != 4){
-            // these are get , append , prepend commands
-            LOGGER.debug("command not supported");
-        }else{
-            int length = Integer.parseInt(headerParts[3]);
-            // String value = new String(bufferedReader.readNBytes(length));
-            byte[] buffer = bufferedInputStream.readNBytes(length);
-            String value = new String(buffer, StandardCharsets.UTF_8);
-            // LOGGER.debug(" string read is {}", value);
-            // LOGGER.debug(value);
-            // for END\r\n one extra read line is required
-            String endLine = readLine(bufferedInputStream);
-            while(endLine != null  && !endLine.equals("END")){
-                endLine = readLine(bufferedInputStream);
-            }
-            // LOGGER.debug(" final lien is {} " , endLine);
-            return value;
+        if(header == null || header.equals("END"))return null;
+        if(!header.startsWith("VALUE")){
+            LOGGER.warn("unexpected reply to get {}: {}", key, header);
+            throw new IOException("unexpected reply to get " + key + ": " + header);
         }
-        return null;
+        String[] headerParts = header.split(" ");
+        
+        int length = Integer.parseInt(headerParts[3]);
+        // String value = new String(bufferedReader.readNBytes(length));
+        byte[] buffer = bufferedInputStream.readNBytes(length);
+        String value = new String(buffer, StandardCharsets.UTF_8);
+        // LOGGER.debug(" string read is {}", value);
+        // LOGGER.debug(value);
+        // for END\r\n one extra read line is required
+        String endLine = readLine(bufferedInputStream);
+        while(endLine != null  && !endLine.equals("END")){
+            endLine = readLine(bufferedInputStream);
+        }
+        // LOGGER.debug(" final lien is {} " , endLine);
+        return value;
     }
 
     public String setValue(String key, String value) throws IOException{
