@@ -2,6 +2,9 @@ package com.memcache.gateway.client;
 
 import java.util.Map;
 
+import com.memcache.gateway.kv.KeyRegistry;
+import com.memcache.gateway.kv.WriteRateLimiter;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -32,6 +35,25 @@ public class BeedbConfig {
     public static class BeedbProperties {
         private Map<String, String> nodes;
 
+        /**
+         * Seconds a written key lives. Bound to beedb.key-ttl-seconds -- Spring's
+         * relaxed binding maps the kebab-case property onto this camelCase field.
+         */
+        private int keyTtlSeconds = 86400;
+
+        /** Cap on how many keys the registry tracks. A public demo gets poked at. */
+        private int maxTrackedKeys = 500;
+
+        /** Writes allowed per client address per hour. */
+        private int maxWritesPerHour = 10;
+
+        public int getKeyTtlSeconds() { return keyTtlSeconds; }
+        public void setKeyTtlSeconds(int keyTtlSeconds) { this.keyTtlSeconds = keyTtlSeconds; }
+        public int getMaxTrackedKeys() { return maxTrackedKeys; }
+        public void setMaxTrackedKeys(int maxTrackedKeys) { this.maxTrackedKeys = maxTrackedKeys; }
+        public int getMaxWritesPerHour() { return maxWritesPerHour; }
+        public void setMaxWritesPerHour(int maxWritesPerHour) { this.maxWritesPerHour = maxWritesPerHour; }
+
         public Map<String, String> getNodes() {
             return nodes;
         }
@@ -47,6 +69,22 @@ public class BeedbConfig {
         this.beedbProperties = beedbProperties;
     }
 
+    /**
+     * The registry expires entries on the SAME ttl the cluster expires the data on.
+     * Two clocks that could drift apart would leave keys whose owner had expired but
+     * whose data had not -- writable by anyone, for reasons invisible from the UI.
+     */
+    @Bean
+    public KeyRegistry keyRegistry() {
+        return new KeyRegistry(beedbProperties.getKeyTtlSeconds(),
+                               beedbProperties.getMaxTrackedKeys());
+    }
+
+    @Bean
+    public WriteRateLimiter writeRateLimiter() {
+        return new WriteRateLimiter(beedbProperties.getMaxWritesPerHour());
+    }
+
     @Bean(destroyMethod = "close")
     public BeedbClient beedbClient() {
         Map<String, String> nodes = beedbProperties.getNodes();
@@ -55,6 +93,6 @@ public class BeedbConfig {
                     "no beedb.nodes.* entries found in application.properties");
         }
         System.out.println("nodes " + nodes);
-        return new BeedbClient(nodes);
+        return new BeedbClient(nodes, beedbProperties.getKeyTtlSeconds());
     }
 }
