@@ -1,6 +1,7 @@
 package com.memcache.gateway.client;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.Map;
 import com.memcache.gateway.client.BeedbConnection;
@@ -32,7 +33,8 @@ public class ConnectionPool {
         int port = Integer.parseInt(address[1]);
         String ip = address[0];
         
-        Socket socket = new Socket(ip, port);
+        Socket socket = new Socket();
+        socket.connect(new InetSocketAddress(ip, port), 1000);
         socket.setSoTimeout(7000);
         return new BeedbConnection(socket);
     }

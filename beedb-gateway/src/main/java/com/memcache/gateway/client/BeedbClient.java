@@ -11,24 +11,48 @@ import com.memcache.gateway.client.beedbexception.BeedbException;
 import com.memcache.gateway.client.beedbexception.BeedbTimeoutException;
 import com.memcache.gateway.client.beedbexception.NoLeaderException;
 import com.memcache.gateway.client.beedbexception.NodeUnreachableException;
+import com.memcache.gateway.cluster.NodeStatus;
 
 import jakarta.annotation.PreDestroy;
 
 import java.net.ConnectException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 public class BeedbClient {
 
     private final ConnectionPool pool;
     private final Map<String, String> nodes; // "node1" -> "127.0.0.1:11211"
     private volatile String leaderAddressString; // an address 
     private Logger LOGGER = LoggerFactory.getLogger(BeedbClient.class.getName());
+    private final ExecutorService executorService;
 
-    public BeedbClient(Map<String, String> nodes) {
+    /**
+     * How long a written key lives, in seconds.
+     *
+     * Fixed by the gateway rather than supplied by the caller: on a public demo a
+     * visitor should not be able to ask for a ten-year TTL. Must stay under 30 days,
+     * or memcached reads it as an absolute unix timestamp instead of a duration.
+     */
+    private final int expirySeconds;
+
+    public BeedbClient(Map<String, String> nodes, int expirySeconds) {
         this.nodes = nodes;
         this.pool = new ConnectionPool();
         this.leaderAddressString = "";
+        this.executorService = Executors.newVirtualThreadPerTaskExecutor();
+        if (expirySeconds < 0 || expirySeconds > 2592000) {
+            throw new IllegalArgumentException(
+                "expirySeconds must be between 0 and 2592000 (30 days), was " + expirySeconds);
+        }
+        this.expirySeconds = expirySeconds;
     }
 
     public String get(String key){
@@ -36,7 +60,7 @@ public class BeedbClient {
     }
 
     public String set(String key, String value){
-        return execute("set", connection -> connection.setValue(key, value));
+        return execute("set", connection -> connection.setValue(key, value, expirySeconds));
     }
 
     public String delete(String key){
@@ -44,40 +68,42 @@ public class BeedbClient {
     }
 
 
-    public String getStats(String address){
+    public NodeStatus getStats(String nodeId, String address){
         String response = null;
         BeedbConnection connection = null;
         try{
             connection = pool.getConnection(address);
             response = connection.getStats();
             pool.putConnection(address, connection);
+            if(response == null) {
+                return NodeStatus.unreachable(nodeId, address);
+            }
+            else return createNodeStatus(response , nodeId , address);
         }catch(Exception e){
             logFailure("stats", address, e);
             pool.closeConnection(connection);
+            return NodeStatus.unreachable(nodeId, address);
         }
-        return response;
     }
 
     public String getleaderAddressString() throws NoLeaderException{
-        String response = null;
         String leaderAdd = null;
         int retryCount = 0;
+        NodeStatus nodeStatus = null;
         while(retryCount++ < 3){
-            for(String addressSet : nodes.values()){
-                response = getStats(addressSet);
-                if(response == null)continue;
-                String[] lines = response.split("\n");
-                String prefix = "STAT raft_leader_id ";
-                for (String line : lines) {
-                    if (line.startsWith(prefix)) {
-                        leaderAdd = line.substring(prefix.length());
-                        break;
-                    }
+            for(Map.Entry<String, String> entry : nodes.entrySet()){
+
+                nodeStatus = getStats(entry.getKey() , entry.getValue());
+                String role = NodeStatus.getRole(nodeStatus);
+                if(role == null)continue;
+                if("LEADER".equals(role)){
+                    leaderAdd = entry.getKey();
+                    break;
                 }
             }
             if(leaderAdd != null)break;
             try{
-                Thread.sleep(1000);
+                Thread.sleep(100);
             }catch(Exception e){
                 Thread.currentThread().interrupt();
                 LOGGER.warn("interrupted while waiting to re-resolve the leader");
@@ -158,8 +184,64 @@ public class BeedbClient {
         
     }
 
+    public List<NodeStatus> getClusterStatus(){
+        List<NodeStatus> nodeStatuses = new ArrayList<>();
+        List<CompletableFuture<NodeStatus>> futures = new ArrayList<>();
+        List<Map.Entry<String,String>> entries = new ArrayList<>(nodes.entrySet());
+        for(Map.Entry<String , String> entry : entries){
+            CompletableFuture<NodeStatus> future = CompletableFuture.supplyAsync(() -> getStats(entry.getKey() , entry.getValue()),executorService);
+            futures.add(future);
+        }
+        for(int i = 0 ; i < futures.size() ; i++){
+            CompletableFuture<NodeStatus> future = futures.get(i);
+            try{
+                NodeStatus result = future.get(1000, TimeUnit.MILLISECONDS);
+                nodeStatuses.add(result);
+            }catch(Exception e){
+                logFailure("exception in getclusterstatus ", entries.get(i).getValue(), e);
+                nodeStatuses.add(NodeStatus.unreachable(entries.get(i).getKey() , entries.get(i).getValue()));
+            }
+        }
+        return nodeStatuses;
+    }
+
+    public NodeStatus createNodeStatus(String response , String nodeId , String address){
+        String[] parts = response.split("\n");
+        Map<String , String> map = new HashMap<>();
+        for(String part : parts){
+            if(part.equals("END")) break;
+            if(!part.startsWith("STAT")) return NodeStatus.unreachable(nodeId, address);
+            String[] keyValue = part.split(" ");
+            map.put(keyValue[1] , keyValue[2]);
+        }
+        return NodeStatus.of(
+            getIntValue("curr_items" , map), nodeId, getValue("raft_role" , map), getLongValue("raft_term" , map), getIntValue("raft_commit_index" , map),
+            getIntValue("raft_last_applied" , map), map.get("raft_leader_id"), getIntValue("raft_last_included_index" , map), getIntValue("raft_log_size" , map)
+            );
+    }
+
+    public Integer getIntValue(String key , Map<String , String> nodes){
+        if(nodes.containsKey(key)) return Integer.parseInt(nodes.get(key));
+        else return null;
+    }
+
+    public Long getLongValue(String key , Map<String , String> nodes){
+        if(nodes.containsKey(key)) return Long.parseLong(nodes.get(key));
+        else return null;
+    }
+
+    public String getValue(String key , Map<String , String> nodes){
+        if(nodes.containsKey(key)) return nodes.get(key);
+        else return null;
+    }
+
+    public String getLeaderAddress(){
+        return leaderAddressString;
+    }
+
     @PreDestroy 
     public void close(){
         pool.closeAllConnections();
+        executorService.shutdown();
     }
 }

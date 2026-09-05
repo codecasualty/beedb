@@ -8,7 +8,7 @@ public class ConcProbe {
         nodes.put("node1","127.0.0.1:11211");
         nodes.put("node2","127.0.0.1:11212");
         nodes.put("node3","127.0.0.1:11213");
-        BeedbClient c = new BeedbClient(nodes);
+        BeedbClient c = new BeedbClient(nodes, 86400);
         c.getleaderAddressString();
 
         // warm up: JIT + pool fill, not measured

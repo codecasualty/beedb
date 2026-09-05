@@ -1,0 +1,25 @@
+#  build output
+**/target/
+*.class
+
+# runtime state produced by running the cluster 
+# change every few seconds while nodes are up. snapshot/ alone reached 62 MB during development.
+beedb-server/state/
+beedb-server/snapshot/
+beedb-server/wal/
+beedb-server/tmp/
+beedb-server/logs/
+beedb-server/*.pid
+
+# stray run artifacts
+logs1.txt
+beedb-server/logs1.txt
+beedb-server/test.txt
+*.log
+
+#  editors 
+.vscode/
+.idea/
+.classpath
+.project
+.settings/

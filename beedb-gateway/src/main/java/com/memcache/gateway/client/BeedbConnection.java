@@ -28,15 +28,17 @@ class BeedbConnection {
         bufferedOutputStream.flush();
         // our response will end with \r\nEND so we have to read till that point
         StringBuilder builder = new StringBuilder();
-        String line = readLine(bufferedInputStream);
-        while(line != null && line.length() > 0){
+        String line = null;
+        while((line = readLine(bufferedInputStream)) != null){    
             builder.append(line);
             builder.append("\n");
-            line = readLine(bufferedInputStream);
-            if(line == null || line.equals("END"))break;
+            if(line.equals("END")){
+                // we are avoiding sending partial responses to clients
+                return builder.toString();
+            }
         }
         // LOGGER.debug(line);
-        return builder.toString();
+        return null;
     }
 
     public String getValue(String key) throws IOException{
@@ -68,8 +70,19 @@ class BeedbConnection {
         return value;
     }
 
-    public String setValue(String key, String value) throws IOException{
-        byte[] bytes = ("set " + key + " 0 0 " + value.getBytes(StandardCharsets.UTF_8).length + "\r\n").getBytes(StandardCharsets.UTF_8);
+    /**
+     * set <key> <flags> <exptime> <bytes>
+     *
+     * exptime is the third field. memcached reads it as RELATIVE SECONDS when it is
+     * 30 days or less, and as an ABSOLUTE unix timestamp when it is larger -- so
+     * 86400 means "a day from now" but 2764800 (32 days) would mean "a moment in
+     * 1970", i.e. already expired. Keep it under 2592000 or convert deliberately.
+     *
+     * It used to be hardcoded to 0, which means NEVER EXPIRES. On a public demo that
+     * is an unbounded store of strangers' data.
+     */
+    public String setValue(String key, String value, int expirySeconds) throws IOException{
+        byte[] bytes = ("set " + key + " 0 " + expirySeconds + " " + value.getBytes(StandardCharsets.UTF_8).length + "\r\n").getBytes(StandardCharsets.UTF_8);
         bufferedOutputStream.write(bytes);
         bufferedOutputStream.write(value.getBytes(StandardCharsets.UTF_8));
         bufferedOutputStream.write("\r\n".getBytes(StandardCharsets.UTF_8));

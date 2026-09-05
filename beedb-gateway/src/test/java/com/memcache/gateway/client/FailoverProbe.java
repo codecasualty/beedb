@@ -17,7 +17,7 @@ public class FailoverProbe {
         nodes.put("node2", "127.0.0.1:11212");
         nodes.put("node3", "127.0.0.1:11213");
 
-        BeedbClient client = new BeedbClient(nodes);
+        BeedbClient client = new BeedbClient(nodes, 86400);
         String leader = client.getleaderAddressString();
         System.out.println("leader = " + leader);
         System.out.println(">>> kill that node now; this will run for 1000 writes\n");
