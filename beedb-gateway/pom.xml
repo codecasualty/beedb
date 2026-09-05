@@ -37,6 +37,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
+    <!-- In-memory key registry with TTL eviction. BeeDB has no way to enumerate
+         keys (no scan/keys command), so the gateway has to remember what it wrote
+         for the store panel to have anything to show. A plain HashMap would grow
+         forever; Caffeine expires entries and is safe for concurrent access.
+         Version comes from the spring-boot BOM. -->
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+    </dependency>
   </dependencies>
 
   <build>
