@@ -2,6 +2,9 @@ package com.memcache.gateway.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 
+import java.net.http.HttpHeaders;
+import java.nio.charset.StandardCharsets;
+
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -20,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.memcache.gateway.client.BeedbClient;
+import com.memcache.gateway.client.BeedbConfig;
 import com.memcache.gateway.kv.KeyRegistry;
 import com.memcache.gateway.kv.WriteRateLimiter;
 
@@ -39,11 +43,14 @@ public class KvController {
     private final BeedbClient beedbClient;
     private final KeyRegistry keyRegistry;
     private final WriteRateLimiter rateLimiter;
+    private final int maxValueBytes;
 
-    public KvController(BeedbClient beedbClient, KeyRegistry keyRegistry, WriteRateLimiter rateLimiter){
+    public KvController(BeedbClient beedbClient, KeyRegistry keyRegistry,
+                        WriteRateLimiter rateLimiter, BeedbConfig.BeedbProperties properties){
         this.beedbClient = beedbClient;
         this.keyRegistry = keyRegistry;
         this.rateLimiter = rateLimiter;
+        this.maxValueBytes = properties.getMaxValueBytes();
     }
 
     /**
@@ -91,6 +98,21 @@ public class KvController {
                                       @RequestBody String value,
                                       @RequestHeader(value = SESSION_HEADER, required = false) String sessionId,
                                       HttpServletRequest request){
+        // Size check FIRST, before the rate limit: an oversized body is rejected
+        // outright, so it should not also cost the client one of their ten writes.
+        //
+        // This is the one check that is load-bearing for safety rather than fairness.
+        // The server reads a command into a single 4096-byte buffer and indexes the
+        // value out of it; a larger value throws BufferUnderflowException, and the
+        // ClosedChannelException that follows has been seen killing the node. Until
+        // the server read path is fixed, this is what stops a stranger with curl
+        // taking the cluster down.
+        int valueBytes = value == null ? 0 : value.getBytes(StandardCharsets.UTF_8).length;
+        if(valueBytes > maxValueBytes){
+            LOGGER.warn("rejected {}-byte value for key {} (max {})", valueBytes, key, maxValueBytes);
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                    .body("value is " + valueBytes + " bytes; the limit is " + maxValueBytes);
+        }
         ResponseEntity<String> limited = rateLimited(request);
         if(limited != null) return limited;
         // 403 rather than 404: the key exists, you simply are not its owner. The UI
@@ -101,13 +123,13 @@ public class KvController {
                     .body("key '" + key + "' belongs to another session");
         }
         String response = beedbClient.set(key, value);
-        if(response == null || response.equals("NOT_STORED")){
-            return ResponseEntity.notFound().build();
+        if(response != null && response.equals("STORED")){
+            // Only after the cluster confirmed it. Recording first would leave the
+            // registry claiming a key that a failed write never created.
+            keyRegistry.recordWrite(key, sessionId);
+            return ResponseEntity.ok(response);
         }
-        // Only after the cluster confirmed it. Recording first would leave the
-        // registry claiming a key that a failed write never created.
-        keyRegistry.recordWrite(key, sessionId);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).build();
     }
 
     @DeleteMapping ("/{key}")
@@ -121,13 +143,18 @@ public class KvController {
                     .body("key '" + key + "' belongs to another session");
         }
         String response = beedbClient.delete(key);
-        if(response == null || response.equals("NOT_FOUND")){
-            // Nothing in the cluster, so drop any stale registry entry too -- a row
-            // the store panel shows for a key that is gone is worse than no row.
+        if(response != null){
             keyRegistry.recordDelete(key);
-            return ResponseEntity.notFound().build();
+            if(response.equals("NOT_FOUND")){
+                return ResponseEntity.notFound().build();
+            }
+            else if(response.equals("DELETED")){
+                return ResponseEntity.ok(response);
+            }
         }
+        // Nothing in the cluster, so drop any stale registry entry too -- a row
+        // the store panel shows for a key that is gone is worse than no row.
         keyRegistry.recordDelete(key);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).build();
     }
 }
