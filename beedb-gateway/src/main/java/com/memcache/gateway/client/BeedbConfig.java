@@ -47,12 +47,17 @@ public class BeedbConfig {
         /** Writes allowed per client address per hour. */
         private int maxWritesPerHour = 10;
 
+        /** Largest value a client may store, bytes. See application.properties. */
+        private int maxValueBytes = 8192;
+
         public int getKeyTtlSeconds() { return keyTtlSeconds; }
         public void setKeyTtlSeconds(int keyTtlSeconds) { this.keyTtlSeconds = keyTtlSeconds; }
         public int getMaxTrackedKeys() { return maxTrackedKeys; }
         public void setMaxTrackedKeys(int maxTrackedKeys) { this.maxTrackedKeys = maxTrackedKeys; }
         public int getMaxWritesPerHour() { return maxWritesPerHour; }
         public void setMaxWritesPerHour(int maxWritesPerHour) { this.maxWritesPerHour = maxWritesPerHour; }
+        public int getMaxValueBytes() { return maxValueBytes; }
+        public void setMaxValueBytes(int maxValueBytes) { this.maxValueBytes = maxValueBytes; }
 
         public Map<String, String> getNodes() {
             return nodes;

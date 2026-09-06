@@ -6,6 +6,7 @@
  */
 
 package com.memcache;
+import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -37,6 +38,7 @@ import com.memcache.raft.RaftRpcServer;
 import java.util.Iterator;
 import java.util.Set;
 import java.nio.channels.SocketChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.Properties;
@@ -51,7 +53,8 @@ public class Server implements AutoCloseable{
     RaftRpcServer raftRpcServer;
     private static Logger LOGGER = LoggerFactory.getLogger(Server.class.getName());
     private RaftTransport raftTransport;
-
+    private static final int INITIAL_BUFFER_SIZE = 4 * 1024;
+    private static final int MAX_BUFFER_SIZE = 8 * 1024;
     public static void main(String[] args) throws IOException{
         // read file name
         String fileName = args[0];
@@ -143,15 +146,21 @@ public class Server implements AutoCloseable{
             while(iterator.hasNext()){
                 SelectionKey key = iterator.next();
                 iterator.remove();
-    
-                if(key.isAcceptable()){
-                    accept(selector, serverSocketChannel);
-                }
-                else if(key.isReadable()){
-                    read(selector, key, executorService);
-                }
-                else if(key.isWritable()){
-                    write(key);
+                try{
+
+                    if(key.isAcceptable()){
+                        // No buffer here: this is the LISTENING socket's key, which never
+                        // reads. Each accepted connection gets its own buffer in read().
+                        accept(selector, serverSocketChannel);
+                    }
+                    else if(key.isReadable()){
+                        read(selector, key, executorService);
+                    }
+                    else if(key.isWritable()){
+                        write(key, selector, executorService);
+                    }
+                }catch(Exception e){
+                    LOGGER.error("something is wrong {}",e);
                 }
             }
         }
@@ -171,70 +180,175 @@ public class Server implements AutoCloseable{
 
     public void read(Selector selector, SelectionKey key, ExecutorService executorService) throws IOException{
         SocketChannel socketChannel = (SocketChannel) key.channel();
+        ByteBuffer channelBuffer = (ByteBuffer) key.attachment();
+        if(channelBuffer == null){
+            channelBuffer = ByteBuffer.allocate(INITIAL_BUFFER_SIZE);
+            key.attach(channelBuffer);
+        }
 
-        // we have to read 4096 bytes to get the command and then ask command parse to give us length of bytes to read next
-        // then we have to read those many bytes and thats our complete command
-        // for example:-
-        // set foo 0 300 5\r\n
-        // hello
-        // that means first we read complete first line and then pass it to command parser to give us length of value bytes to read and then read
-        // those many bytes and thats our value
-        // we can use ByteBuffer to read bytes from socketChannel
+        int bytesRead = socketChannel.read(channelBuffer);
+        LOGGER.debug("read {} bytes; buffer holds {} of {}",
+                bytesRead, channelBuffer.position(), channelBuffer.capacity());
 
-        ByteBuffer buffer = ByteBuffer.allocate(4096);
-        int read = socketChannel.read(buffer);
-        if(read == -1){
-            key.cancel();
+        // -1 is the ONLY case that means the peer is gone. Closing the channel
+        // cancels its key too, so cancel() on its own would leave the socket open
+        // and merely make the selector deaf to it that means we have leaked fd in CLOSE_WAIT.
+        if(bytesRead == -1){
             socketChannel.close();
             return;
         }
-        buffer.flip();
-        StringBuilder commandLine = new StringBuilder();
-        while(buffer.hasRemaining()){
-            char c = (char) buffer.get();
-            if(c == '\r'){
-                break;
+
+        if(bytesRead == 0){
+            if(channelBuffer.hasRemaining()){
+                // Nothing new arrived and there is room for more reeturning is safe
+                // because select() will not report this key again until data lands.
+                return;
             }
-            LOGGER.debug("reading character : {} ", c);
-            commandLine.append(c);
-        }
-        // below code ensure that we read \n after \r and \n is not part of command
-        if(buffer.hasRemaining()) buffer.get();
-        Command command = null;
-        byte[] valueBytes = null;
-        LOGGER.debug("command from client: {}", commandLine.toString());
-        try{
-            command = CommandParser.parse(commandLine.toString());
-            LOGGER.debug("command from client: {}", command);
-            int valueLength = command.getByteLength();
-            if(valueLength >= 0){
-                valueBytes = new byte[valueLength];
-                for(int i = 0; i < valueLength; i++){
-                    valueBytes[i] = (byte) buffer.get();
-                }
-                command.setValue(valueBytes);
+            // no room left, so no future read can EVER make progress
+            // Either grow, or refuse.
+            if(channelBuffer.capacity() >= MAX_BUFFER_SIZE){
+                LOGGER.warn("command exceeds {} bytes from {}; refusing",
+                        MAX_BUFFER_SIZE, socketChannel.getRemoteAddress());
+                sendResponse(key, "SERVER_ERROR object too large for cache\r\n".getBytes(), selector);
+                // the stream is now at an unknown offset , we cannot tell where the
+                // next command starts , so the connection cannot be resynchronised.
+                key.cancel();
+                return;
             }
-        }
-        catch (Exception e){
-            LOGGER.debug("Error while parsing command : {} ", e.getMessage());
-            sendResponse(key, ("ERROR\r\n").getBytes(), selector);
-            return;
+            ByteBuffer grown = ByteBuffer.allocate(MAX_BUFFER_SIZE);
+            channelBuffer.flip();          // without this, put() copies nothing
+            grown.put(channelBuffer);
+            channelBuffer = grown;
+            key.attach(channelBuffer);     
+            LOGGER.debug("grew buffer to {} bytes", MAX_BUFFER_SIZE);
         }
 
+        // dispatch at most ONE command looping here would hand several commands to
+        // the executor at once, and their responses would race onto the same socket
+        // memcached clients match replies to requests BY ORDER, so that corrupts the
+        // session. The next command (if the buffer already holds one) is picked up in
+        // write(), once this response has gone out.
+        tryDispatchOneCommand(key, channelBuffer, selector, executorService);
+    }
+
+
+    /**
+     * Take at most ONE complete command out of the connection's buffer and dispatch it.
+     *
+     * the contract, which every early return depends on: 
+     * if false : then nothing is consumer , leave buffer as it was found 
+     * if true : then we have consumed something.
+     * the buffer IS the state; nothing is remembered between calls, so a half-finished parse cannot leave anything
+     * inconsistent.
+     *
+     * the condition is the one that bites: any path that gives up must not have moved
+     * position, and any path that HANDLES something must consume it. A path that
+     * neither consumes nor makes progress is an infinite spin, because the selector is
+     * level-triggered and will hand us the same bytes forever.
+     */
+    public boolean tryDispatchOneCommand(SelectionKey key, ByteBuffer channelBuffer, Selector selector, ExecutorService executorService) throws IOException{
+        // write mode: position IS the number of bytes held.
+        final int held = channelBuffer.position();
+
+        // scan with the ABSOLUTE get(int) so position stays untouched 
+        // we do not consume anything until we know the whole command is present.
+        int lineEnd = -1;
+        for(int idx = 0; idx < held; idx++){
+            if(channelBuffer.get(idx) == '\n'){ lineEnd = idx; break; }
+        }
+
+        if(lineEnd < 0){
+            // no complete line yet.
+            if(channelBuffer.position() < channelBuffer.capacity()){
+                return false;                       // room left; more bytes can arrive
+            }
+            // buffer is FULL with no line in it, so no future read can make progress.
+            if(channelBuffer.capacity() >= MAX_BUFFER_SIZE){
+                LOGGER.warn("command line exceeds {} bytes; closing connection", MAX_BUFFER_SIZE);
+                sendResponse(key, "SERVER_ERROR object too large for cache\r\n".getBytes(), selector);
+                key.channel().close();
+                return false;
+            }
+            ByteBuffer grown = ByteBuffer.allocate(MAX_BUFFER_SIZE);
+            channelBuffer.flip();                   // without this put() copies nothing
+            grown.put(channelBuffer);
+            key.attach(grown);                      // the buffer belongs to the KEY
+            return false;
+        }
+
+        // the line is bytes [0, lineEnd); strip a trailing '\r' if present doing it by
+        // index avoids the lookbehind arithmetic 
+        int lineLength = lineEnd;
+        if(lineLength > 0 && channelBuffer.get(lineLength - 1) == '\r') lineLength--;
+        byte[] lineBytes = new byte[lineLength];
+        for(int idx = 0; idx < lineLength; idx++) lineBytes[idx] = channelBuffer.get(idx);
+        String commandLine = new String(lineBytes, StandardCharsets.UTF_8);
+
+        final int afterLine = lineEnd + 1;          // first byte past the '\n'
+
+        Command command;
+        try{
+            command = CommandParser.parse(commandLine);
+        }catch(Exception e){
+            // consume the bad line before replying returning without consuming would
+            // re-parse the same garbage on every wakeup 
+            consume(channelBuffer, held, afterLine);
+            LOGGER.debug("unparseable command line: {}", commandLine);
+            sendResponse(key, "ERROR\r\n".getBytes(), selector);
+            return true;                            // we made progress
+        }
+
+        final int valueLength = command.getByteLength();
+        final int consumedEnd;
+
+        if(valueLength < 0){
+            // get / delete / stats -- no data block, so the line IS the whole command.
+            consumedEnd = afterLine;
+        }else{
+            // data block is valueLength bytes plus its own trailing CRLF ,note 0 is a
+            // legal length (an empty value still has the CRLF), which is why -1 rather
+            // than 0 marks "no data block at all".
+            int need = valueLength + 2;
+            if(held - afterLine < need) return false;   // value not all here yet
+            byte[] valueBytes = new byte[valueLength];
+            for(int j = 0; j < valueLength; j++) valueBytes[j] = channelBuffer.get(afterLine + j);
+            command.setValue(valueBytes);
+            consumedEnd = afterLine + need;
+        }
+
+        consume(channelBuffer, held, consumedEnd);
+
+        // one command in flight per connection: stop reading until the response is out.
+        // without this, a second command could be dispatched concurrently and the two
+        // responses could interleave
         key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
         final Command cmd = command;
         executorService.execute(() -> {
             try{
-                byte[] response = processRequest(cmd);
-                LOGGER.info("response which is sent is {}", new String(response));
-                sendResponse(key, response, selector);
+                sendResponse(key, processRequest(cmd), selector);
             }catch (Exception e){
-                // TODO: handle exception
-                LOGGER.error("something is wrong {}",e);
+                LOGGER.error("failed to process {}", cmd.getType(), e);
+                try{ key.channel().close(); }catch(Exception ignored){ }
             }
         });
+        return true;
+    }
 
-        
+    /**
+     * lets say we receive command like command1|command2|command3|command4|command5
+     * then held will be last index of command5 that means we have that many bytes in our buffer (held here means count) (here limit = capacity = 4k)
+     * and now lets say we have processed till command2 so we have consumed command1|command2 lets say that 
+     * index is 20 ,so our position is at index of command2 , so we set position to held index i.e. lets say index 50 
+     * so when we flip that means we have moved from write to read mode that means position = 0 and limit (50)
+     * flip (limit  = position and poisiton = 0) i.e. position = 0 and limit = 50 then we set position to upTo index i.e. 
+     * how many we have consumed , so that means
+     * position = 20 , now when we compact that means everything between position to limit is yet to be consumed i.e. 20..50
+     */
+    private void consume(ByteBuffer buffer, int held, int upTo){
+        buffer.position(held);      // make sure flip() sees the real byte count
+        buffer.flip();              // limit = held, position = 0
+        buffer.position(upTo);      // skip what we used
+        buffer.compact();           // keeps [upTo, held), back to write mode
     }
 
     public void sendResponse(SelectionKey key, byte[] response, Selector selector) throws IOException{
@@ -292,18 +406,41 @@ public class Server implements AutoCloseable{
         }
     }
 
-    public void write(SelectionKey key) throws IOException {
+    /**
+     * Flush one queued response, then look for the NEXT command already in the buffer.
+     *
+     * That second half is the pipelining fix. If a client sends two commands in one
+     * write, the second is sitting in this connection's buffer once the first is
+     * consumed -- and NO further readable event is coming, because the client has sent
+     * everything and is blocked waiting for replies. Nothing would ever look at those
+     * bytes again, and the client would hang until its socket timeout.
+     *
+     * Doing it here rather than looping inside read() keeps exactly one command in
+     * flight per connection, so responses go out in request order. memcached clients
+     * match replies to requests by position, not by amany id, so ordering is not
+     * cosmetic -- interleaved responses hand the client the wrong answers.
+     */
+    public void write(SelectionKey key, Selector selector, ExecutorService executorService) throws IOException {
         
         Map.Entry<SelectionKey, ByteBuffer> entry = pendingWrites.poll();
         if(entry == null) return;
         SelectionKey  selectionKey = entry.getKey();
+        if(selectionKey.isValid() == false) return;
         SocketChannel socketChannel = (SocketChannel) selectionKey.channel();
         ByteBuffer responseBuffer = entry.getValue();
         LOGGER.debug("writing response to client {} ", new String(responseBuffer.array(), 0, responseBuffer.limit()));
         while(responseBuffer.hasRemaining()){
             socketChannel.write(responseBuffer);
-        }// making selector ready for read operation
+        }
+        // Re-arm reads: this connection is free to carry another command.
         selectionKey.interestOps(SelectionKey.OP_READ);
+
+        // The buffer may ALREADY hold a complete command from the same TCP segment.
+        // Nothing will wake us for it, so try now.
+        ByteBuffer channelBuffer = (ByteBuffer) selectionKey.attachment();
+        if(channelBuffer != null && selectionKey.isValid()){
+            tryDispatchOneCommand(selectionKey, channelBuffer, selector, executorService);
+        }
     }
 
     public void close(){

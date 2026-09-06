@@ -145,7 +145,7 @@ public class RaftLog {
 	public int getFirstIndex(long conflictTerm, int prevLogIndex) {
 		if(prevLogIndex > lastIndex()) return lastIndex() + 1;
         else if(prevLogIndex <= lastIncludedIndex) return lastIncludedIndex;
-        int index = prevLogIndex + 1;
+        int index = prevLogIndex;
         while(index > lastIncludedIndex && conflictTerm == termAt(index)){
             index--;
         }
