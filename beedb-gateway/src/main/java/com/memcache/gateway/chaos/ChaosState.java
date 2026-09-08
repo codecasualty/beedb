@@ -15,18 +15,19 @@ public record ChaosState(
     Instant nextAutoAt,
     // ANNOUNCED state need to know to which node is going to get killed and when
     String targetNodeId,
-    Instant killAt
+    Instant killAt,
     // KILLED state need to know which node is killled 
+    boolean observedDown
 ){
     public static ChaosState idle(Instant nextEligibleAt, Instant nextAutoAt){
-        return new ChaosState(ChaosPhase.IDLE, nextEligibleAt, nextAutoAt, null, null);
+        return new ChaosState(ChaosPhase.IDLE, nextEligibleAt, nextAutoAt, null, null, false);
     }
 
     public static ChaosState announced(String targetNodeId, Instant nextEligibleAt, Instant nextAutoAt, Instant killAt){
-        return new ChaosState(ChaosPhase.ANNOUNCED, nextEligibleAt, nextAutoAt, targetNodeId, killAt);
+        return new ChaosState(ChaosPhase.ANNOUNCED, nextEligibleAt, nextAutoAt, targetNodeId, killAt, false);
     }
 
-    public static ChaosState killed(String targetNodeId, Instant nextEligibleAt, Instant nextAutoAt){
-        return new ChaosState(ChaosPhase.KILLED, nextEligibleAt, nextAutoAt, targetNodeId, null);
+    public static ChaosState killed(String targetNodeId, Instant nextEligibleAt, Instant nextAutoAt, boolean observedDown){
+        return new ChaosState(ChaosPhase.KILLED, nextEligibleAt, nextAutoAt, targetNodeId, null, observedDown);
     }
 }
