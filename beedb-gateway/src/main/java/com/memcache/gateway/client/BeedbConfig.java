@@ -1,5 +1,6 @@
 package com.memcache.gateway.client;
 
+import java.time.Clock;
 import java.util.Map;
 
 import com.memcache.gateway.kv.KeyRegistry;
@@ -50,6 +51,15 @@ public class BeedbConfig {
         /** Largest value a client may store, bytes. See application.properties. */
         private int maxValueBytes = 8192;
 
+        /** a node will be killed after these many seconds of receiving kill command from client */
+        private int announceLeadSeconds = 10;
+
+        /** waiting time before triggering next kill command on leader */
+        private int autoKillSeconds = 240;
+
+        /** if we dont receive kill command, automatically trigger leader kill after these many seconds */
+        private int cooldownSeconds = 30;
+
         public int getKeyTtlSeconds() { return keyTtlSeconds; }
         public void setKeyTtlSeconds(int keyTtlSeconds) { this.keyTtlSeconds = keyTtlSeconds; }
         public int getMaxTrackedKeys() { return maxTrackedKeys; }
@@ -58,6 +68,12 @@ public class BeedbConfig {
         public void setMaxWritesPerHour(int maxWritesPerHour) { this.maxWritesPerHour = maxWritesPerHour; }
         public int getMaxValueBytes() { return maxValueBytes; }
         public void setMaxValueBytes(int maxValueBytes) { this.maxValueBytes = maxValueBytes; }
+        public int getAnnounceLeadSeconds() { return announceLeadSeconds; }
+        public void setAnnounceLeadSeconds(int announceLeadSeconds) { this.announceLeadSeconds = announceLeadSeconds; }
+        public int getAutoKillSeconds() { return autoKillSeconds; }
+        public void setAutoKillSeconds(int autoKillSeconds) { this.autoKillSeconds = autoKillSeconds; }
+        public int getCooldownSeconds() { return cooldownSeconds; }
+        public void setCooldownSeconds(int cooldownSeconds) { this.cooldownSeconds = cooldownSeconds; }
 
         public Map<String, String> getNodes() {
             return nodes;
@@ -99,5 +115,10 @@ public class BeedbConfig {
         }
         System.out.println("nodes " + nodes);
         return new BeedbClient(nodes, beedbProperties.getKeyTtlSeconds());
+    }
+
+    @Bean 
+    public Clock clock(){
+        return Clock.systemUTC();
     }
 }
