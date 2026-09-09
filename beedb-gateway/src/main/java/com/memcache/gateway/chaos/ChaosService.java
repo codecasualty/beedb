@@ -20,18 +20,19 @@ public class ChaosService {
     private final int announceLeadSeconds;
     private final int autoKillSeconds;
     private final int cooldownSeconds;
-    private static final int STARTING_SECONDS = 60;
     private static final Logger LOGGER = LoggerFactory.getLogger(ChaosService.class);
-    public ChaosService(NodeSupervisor nodeSupervisor, int announceLeadSeconds, int autoKillSeconds, int cooldownSeconds, Clock clock){
+    public ChaosService(NodeSupervisor nodeSupervisor, int announceLeadSeconds, int autoKillSeconds, int cooldownSeconds, Clock clock, int startingSeconds){
 
         this.nodeSupervisor = nodeSupervisor;
         Instant currentTime = clock.instant();
-        chaosState.set(ChaosState.idle(currentTime.plus(STARTING_SECONDS, ChronoUnit.SECONDS),
+        chaosState.set(ChaosState.idle(currentTime.plus(startingSeconds, ChronoUnit.SECONDS),
         currentTime.plus(autoKillSeconds, ChronoUnit.SECONDS)));
         this.clock = clock;
         this.announceLeadSeconds = announceLeadSeconds;
         this.autoKillSeconds = autoKillSeconds; 
         this.cooldownSeconds = cooldownSeconds;
+        LOGGER.info(" chaoservice is initialized with "+announceLeadSeconds+" "+autoKillSeconds+" "+cooldownSeconds+" "+currentTime+" "+startingSeconds);
+        LOGGER.info("chaoservice current state is "+chaosState.get());
     }
 
     public ChaosState getState(){
@@ -41,6 +42,7 @@ public class ChaosService {
     public ChaosState tick(ClusterSnapshot clusterSnapshot){
 
         ChaosState currentState = chaosState.get();
+        LOGGER.info("tick chaoservice state is "+currentState+" current tiem is "+clock.instant());
         boolean isHealthyCluster = healthyCluster(clusterSnapshot);
         Instant currentInstant = clock.instant();
         if(isHealthyCluster && currentState.phase().equals(ChaosPhase.IDLE)){
@@ -71,12 +73,13 @@ public class ChaosService {
                 }
             }
         }
-
+        LOGGER.info("chaoservice final state is "+chaosState.get());
         return chaosState.get();
 
     }
 
     public ChaosKillState requestKill(String nodeId, ClusterSnapshot clusterSnapshot){
+        LOGGER.info("requestKill called by "+Thread.currentThread().getName()+" time is "+clock.instant());
         ChaosState currentState = chaosState.get();
         Instant nextEligibleAt = currentState.nextEligibleAt();
         Instant currentInstant = clock.instant();
@@ -107,12 +110,7 @@ public class ChaosService {
         // we know that our current time > nextEligibleAt but we dont know future nextEligibleAt so we 
         // not changing it , below logic is same as above and its repeaated but for readability its kept will be removed
         ChaosState currentState = chaosState.get();
-        Instant currStateNextEligibleAt = currentState.nextEligibleAt();
-        Instant currentStateNextAutoAt = currentState.nextAutoAt();
-        Instant killAt = currentInstant.plus(announceLeadSeconds, ChronoUnit.SECONDS);
-    
-        ChaosState newChaosState = ChaosState.announced(nodeId, currStateNextEligibleAt, currentStateNextAutoAt, killAt);
-        return chaosState.compareAndSet(currentState, newChaosState);
+        return transitionIdleAnnouncedRequestKill(nodeId, currentInstant, currentState);
     }
 
     public boolean transitionAnnouncedKilled(String nodeId){
