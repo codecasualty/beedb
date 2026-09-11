@@ -4,7 +4,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.atomic.AtomicReference;
-
+import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,7 +21,9 @@ public class ChaosService {
     private final int autoKillSeconds;
     private final int cooldownSeconds;
     private static final Logger LOGGER = LoggerFactory.getLogger(ChaosService.class);
-    public ChaosService(NodeSupervisor nodeSupervisor, int announceLeadSeconds, int autoKillSeconds, int cooldownSeconds, Clock clock, int startingSeconds){
+    private final Executor killExecutor;
+    public ChaosService(NodeSupervisor nodeSupervisor, int announceLeadSeconds, int autoKillSeconds, 
+        int cooldownSeconds, Clock clock, int startingSeconds, Executor killExecutor){
 
         this.nodeSupervisor = nodeSupervisor;
         Instant currentTime = clock.instant();
@@ -31,6 +33,7 @@ public class ChaosService {
         this.announceLeadSeconds = announceLeadSeconds;
         this.autoKillSeconds = autoKillSeconds; 
         this.cooldownSeconds = cooldownSeconds;
+        this.killExecutor = killExecutor;
         LOGGER.info(" chaoservice is initialized with "+announceLeadSeconds+" "+autoKillSeconds+" "+cooldownSeconds+" "+currentTime+" "+startingSeconds);
         LOGGER.info("chaoservice current state is "+chaosState.get());
     }
@@ -115,22 +118,22 @@ public class ChaosService {
 
     public boolean transitionAnnouncedKilled(String nodeId){
         ChaosState originalState = chaosState.get();
-        Instant currentInstant = clock.instant();
         Instant currStateNextEligibleAt = originalState.nextEligibleAt();
         Instant currentStateNextAutoAt = originalState.nextAutoAt();
         ChaosState newChaosState = ChaosState.killed(nodeId, currStateNextEligibleAt, currentStateNextAutoAt, false);
         boolean isTransitionAnnouncedKilled = chaosState.compareAndSet(originalState, newChaosState);
-        if(isTransitionAnnouncedKilled){
+        if(!isTransitionAnnouncedKilled) return false;
+        killExecutor.execute(() -> {
             try{
                 nodeSupervisor.kill(nodeId);
-                return true;
             }catch(ChaosException e){
-                LOGGER.error("failed to kill node {}", nodeId);
+                Instant currentInstant = clock.instant();
+                LOGGER.error("failed to kill node {}", nodeId,e);
                 ChaosState idleState = ChaosState.idle(currentInstant.plus(cooldownSeconds, ChronoUnit.SECONDS) , currentInstant.plus(autoKillSeconds, ChronoUnit.SECONDS));
                 chaosState.compareAndSet(newChaosState, idleState);
             }
-        }
-        return false;
+        });
+        return true;
     }
 
     public boolean transitionKilledIdle(String nodeId, Instant currentInstant){
