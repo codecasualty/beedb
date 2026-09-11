@@ -36,7 +36,7 @@ public class ChaosServiceTest {
     private final MutableClock        clock      = MutableClock.atEpochStart();
     private final FakeNodeSupervisor  supervisor = new FakeNodeSupervisor();
     private final ChaosService        chaos      = new ChaosService(
-            supervisor, ANNOUNCE_LEAD_SECONDS, AUTO_KILL_SECONDS, COOLDOWN_SECONDS, clock, STARTING_SECONDS);
+            supervisor, ANNOUNCE_LEAD_SECONDS, AUTO_KILL_SECONDS, COOLDOWN_SECONDS, clock, STARTING_SECONDS, Runnable::run);
     private static final Logger LOGGER = LoggerFactory.getLogger(ChaosServiceTest.class);
 
 
