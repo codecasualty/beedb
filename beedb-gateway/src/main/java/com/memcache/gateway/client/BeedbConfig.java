@@ -1,10 +1,20 @@
 package com.memcache.gateway.client;
 
+import java.nio.file.Path;
 import java.time.Clock;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
+import com.memcache.gateway.chaos.ChaosService;
 import com.memcache.gateway.kv.KeyRegistry;
 import com.memcache.gateway.kv.WriteRateLimiter;
+import com.memcache.gateway.supervisor.NodeSupervisor;
+import com.memcache.gateway.supervisor.ProcessNodeSupervisor;
+
+import ch.qos.logback.core.pattern.parser.Node;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -60,6 +70,13 @@ public class BeedbConfig {
         /** if we dont receive kill command, automatically trigger leader kill after these many seconds */
         private int cooldownSeconds = 30;
 
+        private int chaosStartupGraceSeconds = 60;
+
+        private String supervisorServerDir = "../beedb-server";
+
+        private int restartAfterSeconds = 15;
+
+
         public int getKeyTtlSeconds() { return keyTtlSeconds; }
         public void setKeyTtlSeconds(int keyTtlSeconds) { this.keyTtlSeconds = keyTtlSeconds; }
         public int getMaxTrackedKeys() { return maxTrackedKeys; }
@@ -74,6 +91,12 @@ public class BeedbConfig {
         public void setAutoKillSeconds(int autoKillSeconds) { this.autoKillSeconds = autoKillSeconds; }
         public int getCooldownSeconds() { return cooldownSeconds; }
         public void setCooldownSeconds(int cooldownSeconds) { this.cooldownSeconds = cooldownSeconds; }
+        public int getChaosStartupGraceSeconds() { return chaosStartupGraceSeconds; }
+        public void setChaosStartupGraceSeconds(int chaosStartupGraceSeconds) { this.chaosStartupGraceSeconds = chaosStartupGraceSeconds; }
+        public String getSupervisorServerDir() { return supervisorServerDir; }
+        public void setSupervisorServerDir(String supervisorServerDir) { this.supervisorServerDir = supervisorServerDir; }
+        public int getRestartAfterSeconds() { return restartAfterSeconds; }
+        public void setRestartAfterSeconds(int restartAfterSeconds) { this.restartAfterSeconds = restartAfterSeconds; }
 
         public Map<String, String> getNodes() {
             return nodes;
@@ -120,5 +143,32 @@ public class BeedbConfig {
     @Bean 
     public Clock clock(){
         return Clock.systemUTC();
+    }
+
+    @Bean 
+    public NodeSupervisor nodeSupervisor(){
+        Set<String> nodeIds = beedbProperties.getNodes().keySet();
+        String supervisorServerDir = beedbProperties.getSupervisorServerDir();
+        int restartAfterSeconds = beedbProperties.getRestartAfterSeconds();
+        return new ProcessNodeSupervisor(Set.copyOf(nodeIds), Path.of(supervisorServerDir), restartAfterSeconds);
+    }
+
+    @Bean 
+    public ChaosService chaosService(NodeSupervisor nodeSupervisor, Clock clock){
+        int announceLeadSeconds = beedbProperties.getAnnounceLeadSeconds();
+        int autoKillSeconds = beedbProperties.getAutoKillSeconds();
+        int cooldownSeconds = beedbProperties.getCooldownSeconds();
+        int startingSeconds = beedbProperties.getChaosStartupGraceSeconds();
+        Executor killExecutor = Executors.newFixedThreadPool(1 , killThreadFactory());
+        return new ChaosService(nodeSupervisor, announceLeadSeconds, autoKillSeconds, cooldownSeconds, clock, startingSeconds, killExecutor);
+    }
+
+    private ThreadFactory killThreadFactory(){
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable, "chaos-kill");
+            thread.setDaemon(true);
+            return thread;
+        };
+        return threadFactory;
     }
 }

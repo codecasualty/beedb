@@ -1,9 +1,11 @@
 package com.memcache.gateway.chaos;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +47,6 @@ public class ChaosService {
     public ChaosState tick(ClusterSnapshot clusterSnapshot){
 
         ChaosState currentState = chaosState.get();
-        LOGGER.info("tick chaoservice state is "+currentState+" current tiem is "+clock.instant());
         boolean isHealthyCluster = healthyCluster(clusterSnapshot);
         Instant currentInstant = clock.instant();
         if(isHealthyCluster && currentState.phase().equals(ChaosPhase.IDLE)){
@@ -76,13 +77,11 @@ public class ChaosService {
                 }
             }
         }
-        LOGGER.info("chaoservice final state is "+chaosState.get());
         return chaosState.get();
 
     }
 
     public ChaosKillState requestKill(String nodeId, ClusterSnapshot clusterSnapshot){
-        LOGGER.info("requestKill called by "+Thread.currentThread().getName()+" time is "+clock.instant());
         ChaosState currentState = chaosState.get();
         Instant nextEligibleAt = currentState.nextEligibleAt();
         Instant currentInstant = clock.instant();
@@ -160,5 +159,28 @@ public class ChaosService {
             }
         }
         return true;
+    }
+
+    public ChaosView getChaosView(){
+        ChaosState chaosState = getState();
+        Instant now = clock.instant();
+        Instant killAt = chaosState.killAt();
+        Long secondsUntilKill = null;
+        if(chaosState.phase().equals(ChaosPhase.ANNOUNCED) && killAt != null){
+            long msUntilKill = Duration.between(now, killAt).toMillis();
+            secondsUntilKill = (long) Math.max(0, Math.ceilDiv(msUntilKill, 1000L));
+
+        }
+        return new ChaosView(
+            chaosState.phase(),
+            chaosState.targetNodeId(),
+            chaosState.nextAutoAt(),
+            secondsUntilKill
+        );
+    }
+
+    public long secondsUntilEligible(){
+        long msUntilKill = Duration.between(clock.instant(), getState().nextEligibleAt()).toMillis();
+        return Math.max(0, Math.ceilDiv(msUntilKill, 1000L));
     }
 }
