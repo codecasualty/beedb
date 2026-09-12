@@ -52,7 +52,7 @@ public class ProcessNodeSupervisor implements NodeSupervisor {
                 try {
                     chaosRestore(nodeId);
                 } catch (Exception e) {
-                    LOGGER.error("exceptino in chaos-restorer thread for node id "+nodeId+" "+e.getMessage(),e);
+                    LOGGER.error("failed to restore node {}", nodeId, e);
                 }
             }, restartAfterSeconds, TimeUnit.SECONDS);
 
@@ -69,13 +69,19 @@ public class ProcessNodeSupervisor implements NodeSupervisor {
 
     private void chaosRestore(String nodeId) throws IOException{
         String cp = Files.readString(serverDirectory.resolve("target/classpath.txt")).trim();
+        // stdout is discarded: logback's CONSOLE appender writes every log line there, and
+        // logs/<node>.log already has them, rotated. stderr goes to a file instead it
+        // stays empty unless the JVM dies of something only stderr sees, such as an
+        // uncaught Error
+        Path err = serverDirectory.resolve("logs").resolve(nodeId + ".err");
+        Files.createDirectories(err.getParent());
         new ProcessBuilder(List.of(
-        "java", "-Dnode.id=" + nodeId,
+        "setsid", "java", "-Dnode.id=" + nodeId,
         "-cp", "target/classes:" + cp,
         "com.memcache.Server", nodeId + ".properties"))
             .directory(serverDirectory.toFile())
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.appendTo(err.toFile()))
             .start(); 
     }
     

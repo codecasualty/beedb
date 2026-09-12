@@ -2,7 +2,6 @@ package com.memcache.gateway.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 
-import java.net.http.HttpHeaders;
 import java.nio.charset.StandardCharsets;
 
 import java.util.List;
@@ -24,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.memcache.gateway.client.BeedbClient;
 import com.memcache.gateway.client.BeedbConfig;
+import com.memcache.gateway.demo.DemoWriter;
 import com.memcache.gateway.kv.KeyRegistry;
 import com.memcache.gateway.kv.WriteRateLimiter;
 
@@ -74,6 +74,19 @@ public class KvController {
     }
 
     /**
+     * 403 for keys the demo writer owns,checked before
+     * the rate limit, so a refused request does not also cost the visitor a write.
+     */
+    private ResponseEntity<String> reservedKey(String key) {
+        if (!key.startsWith(DemoWriter.KEY_PREFIX)) {
+            return null;
+        }
+        LOGGER.debug("rejected write to reserved demo key {}", key);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body("key '" + key + "' is reserved for the demo writer");
+    }
+
+    /**
      * Every key the gateway has written and who owns it.
      *
      * This endpoint exists because BeeDB cannot enumerate keys -- memcached has no
@@ -101,18 +114,16 @@ public class KvController {
         // Size check FIRST, before the rate limit: an oversized body is rejected
         // outright, so it should not also cost the client one of their ten writes.
         //
-        // This is the one check that is load-bearing for safety rather than fairness.
-        // The server reads a command into a single 4096-byte buffer and indexes the
-        // value out of it; a larger value throws BufferUnderflowException, and the
-        // ClosedChannelException that follows has been seen killing the node. Until
-        // the server read path is fixed, this is what stops a stranger with curl
-        // taking the cluster down.
+        // The server accepts up to 8192 bytes per command, line and value together, so
+        // its real ceiling depends on how long the key is
         int valueBytes = value == null ? 0 : value.getBytes(StandardCharsets.UTF_8).length;
         if(valueBytes > maxValueBytes){
             LOGGER.warn("rejected {}-byte value for key {} (max {})", valueBytes, key, maxValueBytes);
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                     .body("value is " + valueBytes + " bytes; the limit is " + maxValueBytes);
         }
+        ResponseEntity<String> reserved = reservedKey(key);
+        if(reserved != null) return reserved;
         ResponseEntity<String> limited = rateLimited(request);
         if(limited != null) return limited;
         // 403 rather than 404: the key exists, you simply are not its owner. The UI
@@ -136,6 +147,8 @@ public class KvController {
     public ResponseEntity<String> delete(@PathVariable("key") String key,
                                          @RequestHeader(value = SESSION_HEADER, required = false) String sessionId,
                                          HttpServletRequest request){
+        ResponseEntity<String> reserved = reservedKey(key);
+        if(reserved != null) return reserved;
         ResponseEntity<String> limited = rateLimited(request);
         if(limited != null) return limited;
         if(!keyRegistry.mayWrite(key, sessionId)){
