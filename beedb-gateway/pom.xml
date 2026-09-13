@@ -54,21 +54,24 @@
       <groupId>org.codehaus.mojo</groupId>
       <artifactId>exec-maven-plugin</artifactId>
       <version>3.0.0</version>
-      <executions>
-        <execution>
-          <goals>
-            <goal>java</goal>
-          </goals>
-        </execution>
-      </executions>
       <configuration>
-        <mainClass>com.memcache.gateway.client.BeedbClient</mainClass>
+        <mainClass>com.memcache.gateway.GatewayApplication</mainClass>
       </configuration>
     </plugin>
     <plugin>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-maven-plugin</artifactId>
       <version>${spring.boot.version}</version>
+      <executions>
+        <execution>
+          <goals>
+            <goal>repackage</goal>
+          </goals>
+        </execution>
+      </executions>
+      <configuration>
+        <mainClass>com.memcache.gateway.GatewayApplication</mainClass>
+      </configuration>
     </plugin>
   </plugins>
 </build>

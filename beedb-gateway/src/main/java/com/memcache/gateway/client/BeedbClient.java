@@ -68,6 +68,27 @@ public class BeedbClient {
     }
 
 
+    /*
+     * Nodes whose last stats request failed. The status poll asks every node once a second,
+     * so a node that is down for a 15-second chaos round used to log the same WARN 15 times.
+     * Logging only the two transitions -- gone, then back -- says the same thing.
+     */
+    private final java.util.Set<String> unreachableNodes = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private void statsFailed(String operation, String address, Exception e){
+        if(unreachableNodes.add(address)){
+            logFailure(operation, address, e);
+        }else{
+            LOGGER.debug("{} still failing on node {} ({})", operation, address, e.toString());
+        }
+    }
+
+    private void statsAnswered(String address){
+        if(unreachableNodes.remove(address)){
+            LOGGER.info("node {} is answering again", address);
+        }
+    }
+
     public NodeStatus getStats(String nodeId, String address){
         String response = null;
         BeedbConnection connection = null;
@@ -78,9 +99,10 @@ public class BeedbClient {
             if(response == null) {
                 return NodeStatus.unreachable(nodeId, address);
             }
-            else return createNodeStatus(response , nodeId , address);
+            statsAnswered(address);
+            return createNodeStatus(response , nodeId , address);
         }catch(Exception e){
-            logFailure("stats", address, e);
+            statsFailed("stats", address, e);
             pool.closeConnection(connection);
             return NodeStatus.unreachable(nodeId, address);
         }
@@ -135,6 +157,13 @@ public class BeedbClient {
             LOGGER.warn("{} failed: node {} is unreachable ({})", operation, address, e.getMessage());
         }else if(e instanceof java.net.SocketTimeoutException){
             LOGGER.warn("{} failed: node {} timed out ({})", operation, address, e.getMessage());
+        }else if(e instanceof NoLeaderException){
+            // Expected for the second or two an election takes -- every chaos round causes one.
+            LOGGER.warn("{} failed: no leader right now ({})", operation, e.getMessage());
+        }else if(e instanceof java.util.concurrent.TimeoutException){
+            // The status poll gives each node a fixed wait and records a slow one as unreachable
+            // for that tick 
+            LOGGER.warn("{}: node {} did not answer in time", operation, address);
         }else{
             LOGGER.error("{} failed unexpectedly against node {}", operation, address, e);
         }
@@ -198,7 +227,7 @@ public class BeedbClient {
                 NodeStatus result = future.get(1000, TimeUnit.MILLISECONDS);
                 nodeStatuses.add(result);
             }catch(Exception e){
-                logFailure("exception in getclusterstatus ", entries.get(i).getValue(), e);
+                statsFailed("stats poll", entries.get(i).getValue(), e);
                 nodeStatuses.add(NodeStatus.unreachable(entries.get(i).getKey() , entries.get(i).getValue()));
             }
         }

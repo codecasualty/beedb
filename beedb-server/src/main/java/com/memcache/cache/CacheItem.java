@@ -12,11 +12,14 @@ public class CacheItem {
     private boolean     infiniteExpiry;
     private int         flags;
 
-    public CacheItem(String key, byte[] value, int flags, int expiry) {
+    public CacheItem(String key, byte[] value, int flags, long expiry) {
         this.key                = key;
         this.value              = value;
         this.flags              = flags;
-        this.expiresAt          = (expiry == 0) ? -1 : System.currentTimeMillis() + (expiry * 1000L);
+        // expiry is already an absolute epoch-millisecond deadline, set once by the leader.
+        // Never read the clock here: applying an entry must give the same result on every node
+        // and on every replay.
+        this.expiresAt          = (expiry == 0) ? -1 : expiry;
         this.infiniteExpiry     = (expiry == 0);
     }
 

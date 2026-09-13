@@ -7,11 +7,14 @@ public class Command {
     private CommandType type;
     private String      key;
     private int         flags;
-    private int         expiry;
+    // From the client: memcached seconds (from now, or an absolute Unix time above 30 days).
+    // After the leader converts it (Server.absoluteExpiryMillis), and in every log entry: an
+    // absolute deadline in epoch milliseconds, or 0 for "never".
+    private long        expiry;
     private int         byteLength;
     private byte[]      value;
 
-    public Command(CommandType type, String key, int flags, int expiry, int byteLength) {
+    public Command(CommandType type, String key, int flags, long expiry, int byteLength) {
         this.type      = type;
         this.key       = key;
         this.flags     = flags;
@@ -31,7 +34,7 @@ public class Command {
         return flags;
     }
 
-    public int getExpiry() {
+    public long getExpiry() {
         return expiry;
     }
 
@@ -55,7 +58,7 @@ public class Command {
         this.flags = flags;
     }
 
-    public void setExpiry(int expiry) {
+    public void setExpiry(long expiry) {
         this.expiry = expiry;
     }
 
@@ -69,7 +72,7 @@ public class Command {
         CommandType type = CommandType.valueOf(parts[0]);
         String key = parts[1];
         int flags = Integer.parseInt(parts[2]);
-        int expiry = Integer.parseInt(parts[3]);
+        long expiry = Long.parseLong(parts[3]);
         int byteLength = Integer.parseInt(parts[4]);
         Command cmd = new Command(type, key, flags, expiry, byteLength);
         if (parts.length == 6 && !parts[5].isEmpty()) {
