@@ -6,7 +6,6 @@
  */
 
 package com.memcache;
-import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -55,6 +54,8 @@ public class Server implements AutoCloseable{
     private RaftTransport raftTransport;
     private static final int INITIAL_BUFFER_SIZE = 4 * 1024;
     private static final int MAX_BUFFER_SIZE = 8 * 1024;
+    // memcached: an expiry above 30 days is an absolute Unix time, not seconds-from-now.
+    private static final long MAX_RELATIVE_EXPIRY_SECONDS = 30L * 24 * 60 * 60;
     public static void main(String[] args) throws IOException{
         // read file name
         String fileName = args[0];
@@ -112,6 +113,19 @@ public class Server implements AutoCloseable{
             return defaultValue;
         }
         return Integer.parseInt(raw.trim());
+    }
+
+    /**
+     * the client's memcached expiry, as an absolute deadline in epoch milliseconds.
+     *   0              never expires              -> 0
+     *   1 .. 30 days   seconds from now           -> now + seconds
+     *   above 30 days  an absolute Unix time      -> that time, in milliseconds
+     *   negative       already expired            -> a moment in the past
+     */
+    static long absoluteExpiryMillis(long expiry, long nowMillis){
+        if(expiry == 0) return 0;
+        if(expiry > MAX_RELATIVE_EXPIRY_SECONDS) return expiry * 1000L;
+        return nowMillis + expiry * 1000L;
     }
 
     public void start(ArrayList<String> peers, String nodeId, int clientPort,int raftPort, String stateDir, String snapshotDir, 
@@ -380,6 +394,7 @@ public class Server implements AutoCloseable{
                 return response.toProtocolString().getBytes();
             }
             else{
+                command.setExpiry(absoluteExpiryMillis(command.getExpiry(), System.currentTimeMillis())); 
                 LOGGER.info("command type is {}", command.getType());
                 LOGGER.info("command is {}", command);
                 // we have to propose this command to raft node

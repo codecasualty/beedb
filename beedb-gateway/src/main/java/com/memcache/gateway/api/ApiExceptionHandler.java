@@ -6,7 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-
+import java.io.IOException;
 import com.memcache.gateway.client.beedbexception.BeedbException;
 import com.memcache.gateway.client.beedbexception.BeedbTimeoutException;
 import com.memcache.gateway.client.beedbexception.NoLeaderException;
@@ -38,5 +38,10 @@ public class ApiExceptionHandler {
         }
         LOGGER.error("Exception occurred in the controller", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+    }
+
+    @ExceptionHandler (IOException.class)
+    public void handleClientDisconnect(IOException ex){
+        LOGGER.debug("client disconnected: {}", ex.getMessage());
     }
 }

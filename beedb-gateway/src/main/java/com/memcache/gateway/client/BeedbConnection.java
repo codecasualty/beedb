@@ -3,6 +3,7 @@ package com.memcache.gateway.client;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.net.SocketException;
 import java.net.Socket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -113,18 +114,18 @@ class BeedbConnection {
             LOGGER.error("something is wrong ",e);
         }
     }
-
-    public String readLine(BufferedInputStream bufferedInputStream) {
+    
+    public String readLine(BufferedInputStream bufferedInputStream) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         while(true){
-            try{
-                int c = bufferedInputStream.read();
-                if(c == -1 || c == '\n')break;
-                baos.write(c);
-            }catch(Exception e){
-                LOGGER.error("readLine threw exception ", e);
-                break;
+            int c = bufferedInputStream.read();
+            if(c == -1){
+                // the node closed the connection mid-reply: it died or restarted. Same outcome as
+                // a reset ,  this socket is finished and must not go back into the pool.
+                throw new SocketException("connection closed by node before the reply ended");
             }
+            if(c == '\n')break;
+            baos.write(c);
         }
         byte[] buffer = baos.toByteArray();
         if(buffer.length > 0 && buffer[buffer.length-1] == '\r')return new String(buffer, 0, buffer.length-1, StandardCharsets.UTF_8);

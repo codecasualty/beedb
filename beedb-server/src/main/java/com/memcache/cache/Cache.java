@@ -23,7 +23,7 @@ public class Cache {
         return null;
     }
 
-    public void put(String key, byte[] value, int flags, int expiry) {
+    public void put(String key, byte[] value, int flags, long expiry) {
         map.put(key, new CacheItem(key, value, flags, expiry));
     }
 

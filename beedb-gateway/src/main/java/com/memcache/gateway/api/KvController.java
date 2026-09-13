@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 import java.nio.charset.StandardCharsets;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.memcache.gateway.client.BeedbClient;
@@ -94,8 +96,18 @@ public class KvController {
      * keys the current browser happened to write itself.
      */
     @GetMapping
-    public ResponseEntity<List<KeyRegistry.Entry>> keys(){
-        return ResponseEntity.ok(keyRegistry.list());
+    public ResponseEntity<List<KeyRegistry.Entry>> keys(
+            @RequestParam(value = "limit", defaultValue = "100") int limit,
+            @RequestHeader(value = SESSION_HEADER, required = false) String sessionId){
+        List<KeyRegistry.Entry> all = keyRegistry.list();            // newest first
+        int n = Math.max(0, Math.min(limit, 200));
+        List<KeyRegistry.Entry> out = new ArrayList<>(all.subList(0, Math.min(n, all.size())));
+        if(sessionId != null){
+            for(KeyRegistry.Entry e : all){
+                if(sessionId.equals(e.sessionId()) && !out.contains(e)) out.add(e);
+            }
+        }
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping ("/{key}")

@@ -1,5 +1,7 @@
 package com.memcache.raft.wal;
 import com.memcache.raft.LogEntry;
+
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -25,6 +27,8 @@ import java.util.zip.CRC32;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.memcache.raft.FailStop;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -67,11 +71,12 @@ public class WalService {
             try{
                 writeToFile();
             }catch(Exception e){
-                // LOGGER.error("something is wrong {}",e);
-                LOGGER.error("file in which write failed is ", walFilePath);
-                LOGGER.error("error while writing to file, please check stack trace ", e);
-                if(!stopping) shutdown();
-                break;
+                // shutdown() interrupts this thread and closes the channel; a write or fsync caught
+                // mid-flight then throws ClosedByInterruptException or AsynchronousCloseException.
+                if(stopping) break;
+                // real write/fsync failure. Exit instead of lingering: a leader whose WAL cannot
+                // persist keeps heartbeating
+                FailStop.halt(LOGGER, "WAL write failed on " + walFilePath, e);
             }
         }
     }

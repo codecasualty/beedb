@@ -42,7 +42,7 @@ public class DemoWriter {
         this.keyRegistry = keyRegistry;
     }
 
-    @Scheduled (fixedDelay = 1000)
+    @Scheduled (fixedDelay = 2000)
     public void write(){
         long n = attempts++;
         String key = KEY_PREFIX + (n % RING_SIZE);

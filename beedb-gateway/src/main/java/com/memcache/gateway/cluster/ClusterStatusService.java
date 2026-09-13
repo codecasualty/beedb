@@ -54,6 +54,8 @@ public class ClusterStatusService {
         emitters.add(emitter);  
         try {
             emitter.send(clusterView);
+        } catch (IOException e) {
+            clientGone(emitter, e);
         } catch (Exception e) {
             logFailure(e, "failed to send cluster status");
         }
@@ -66,11 +68,18 @@ public class ClusterStatusService {
             try {
                 emitter.send(clusterView);
                 LOGGER.debug("sent cluster status");
+            } catch (IOException e) {
+                clientGone(emitter, e);
             } catch (Exception e) {
                 emitters.remove(emitter);
                 logFailure(e , "failed to send cluster status");
             }
         });
+    }
+    
+    private void clientGone(SseEmitter emitter, IOException e){
+        emitters.remove(emitter);
+        LOGGER.debug("stream client disconnected ({})", e.getMessage());
     }
 
     public void updateClusterStatus(){

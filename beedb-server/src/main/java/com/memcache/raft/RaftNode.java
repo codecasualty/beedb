@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -185,11 +184,11 @@ public class RaftNode{
     // and still the problem of deadlock is not solved
     // so we are using synchronized blocks whenever required
     private void startElection(){
-        LOGGER.info("startElection for term {} by {}", currentTerm, nodeId);
         synchronized(this){
             if(isLeader()) return;
             leaderId = null;
             transitionToCandidate();
+            LOGGER.info("startElection for term {} by {}", currentTerm, nodeId);
             resetElectionTimer(); 
         }
         // below method is synchronized internally and so we dont need to add this in synchronized block
@@ -933,8 +932,20 @@ public class RaftNode{
         return future;
     }
 
-    // backgroud loop which applied commited entires to our cache
+    /**
+     * backgroud loop which applied commited entires to our cache
+     * a dead apply loop means this node can never make progress again, so it fail-stops instead.
+     */
     private void applyCommitedEntries(){
+        try{
+            applyCommitedEntriesLoop();
+        }catch(Throwable t){
+            if(stopping) return;   // stop() interrupts this thread; that is not a failure
+            FailStop.halt(LOGGER, "apply loop died on " + nodeId + " at lastApplied=" + lastApplied, t);
+        }
+    }
+
+    private void applyCommitedEntriesLoop(){
         MDC.put("nodeId", nodeId);
         while(!Thread.currentThread().isInterrupted()){
             
@@ -1004,8 +1015,11 @@ public class RaftNode{
                 Response response = null;
                 LOGGER.debug("term {} node id {} applying entry {} at index {} ", currentTerm, nodeId, entry, lastApplied);
                 if(!entry.isNoOp()) {
-                    Command command = Command.deserialize(entry.getCommand());
+                    // deserialize sits inside the try too. Every node parses the same bytes and fails
+                    // the same way, so each skips the same entry and they stay identical. Outside the
+                    // try, one entry it could not parse killed this loop on every node at once.
                     try{
+                        Command command = Command.deserialize(entry.getCommand());
                         response = CommandProcessor.process(command, cache);
                     } catch (Exception e) {
                         LOGGER.error("failed to apply command at index {} : {} - {}",
