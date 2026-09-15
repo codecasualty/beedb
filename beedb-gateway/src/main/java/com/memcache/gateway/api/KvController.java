@@ -69,8 +69,11 @@ public class KvController {
             return null;
         }
         LOGGER.warn("rate limit hit by {} ({} writes/hour)", client, rateLimiter.maxWritesPerHour());
+        // Retry-After is when this client's window really ends, not a flat hour: a visitor who
+        // hit the limit 50 minutes into their window only has 10 minutes to wait.
+        long retryAfter = Math.max(1, rateLimiter.resetInSeconds(client));
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", "3600")
+                .header("Retry-After", String.valueOf(retryAfter))
                 .body("write limit reached: " + rateLimiter.maxWritesPerHour()
                       + " writes per hour. This is a shared demo.");
     }

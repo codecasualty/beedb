@@ -10,10 +10,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.memcache.gateway.kv.WriteRateLimiter;
 
-/**
- * How many writes this client has left this hour, so the page shows the server's real count
- * instead of guessing
- */
 @RestController
 @RequestMapping("/api")
 public class QuotaController {
@@ -25,9 +21,10 @@ public class QuotaController {
     }
 
     @GetMapping("/quota")
-    public Map<String, Integer> quota(HttpServletRequest request) {
+    public Map<String, Long> quota(HttpServletRequest request) {
         String client = request.getRemoteAddr();
-        return Map.of("remaining", rateLimiter.remaining(client),
-                      "limit", rateLimiter.maxWritesPerHour());
+        return Map.of("remaining", (long) rateLimiter.remaining(client),
+                      "limit", (long) rateLimiter.maxWritesPerHour(),
+                      "resetInSeconds", rateLimiter.resetInSeconds(client));
     }
 }

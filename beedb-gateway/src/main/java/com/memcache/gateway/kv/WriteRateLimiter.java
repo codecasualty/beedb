@@ -83,6 +83,14 @@ public class WriteRateLimiter {
         return Math.max(0, maxWritesPerHour - used);
     }
 
+    public long resetInSeconds(String clientId) {
+        return writesPerClient.policy().expireAfterWrite()
+                .flatMap(window -> window.ageOf(clientId)
+                        .map(age -> window.getExpiresAfter().minus(age)))
+                .map(left -> Math.max(0L, (left.toMillis() + 999) / 1000))
+                .orElse(0L);
+    }
+
     public int maxWritesPerHour() {
         return maxWritesPerHour;
     }
