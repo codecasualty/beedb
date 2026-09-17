@@ -31,12 +31,6 @@ import com.memcache.command.CommandType;
  *   If the client was told STORED, the value is still there afterwards --
  *   no matter what died in between.
  *
- * The distinction that makes the test meaningful is between an ACKNOWLEDGED
- * write and an ATTEMPTED one. Raft promises nothing about a write whose future
- * completed exceptionally or timed out -- that entry may or may not be in the
- * log, and either outcome is legal. So the test records a key ONLY after
- * propose()'s future returns normally, and asserts only on that set. Asserting
- * on attempted writes would produce a test that fails for correct behaviour.
  */
 public class DurabilityIT {
 
@@ -60,19 +54,10 @@ public class DurabilityIT {
         if (cluster != null) cluster.close();
     }
 
-    // ------------------------------------------------------------------
-    // Test 1: the leader dies mid-write.
-    // ------------------------------------------------------------------
-
     /**
-     * Kill the leader while writes are in flight, let a new one be elected,
+     * kill the leader while writes are in flight, let a new one be elected,
      * bring the dead node back, and require every acknowledged write to be
      * readable on every node.
-     *
-     * This exercises the paths that only exist under failover: a log that
-     * diverges at the tail, nextIndex backtracking, and the rollback path in
-     * propose(). A write that was acknowledged before the kill must survive the
-     * new leader's log reconciliation.
      */
     @Test
     public void acknowledgedWritesSurviveLeaderCrash() throws Exception {
@@ -83,16 +68,12 @@ public class DurabilityIT {
         Writers writers = new Writers();
         writers.start();
 
-        // Let real traffic build up before breaking anything. Killing the leader
-        // with an empty log tests nothing interesting.
         writers.awaitAcks(50, 20_000);
 
         String victim = cluster.leaders().get(0).getNodeId();
         LOGGER.info("killing leader {} with {} acked writes so far", victim, writers.acked.size());
         cluster.stopNode(victim);
 
-        // Writers keep going against whoever wins. They will see a burst of
-        // "Not Leader" failures in the gap -- those are not recorded, by design.
         RaftNode newLeader = cluster.awaitLeader(20_000);
         assertNotNull("no leader elected after the crash", newLeader);
         LOGGER.info("new leader is {}", newLeader.getNodeId());
@@ -107,35 +88,9 @@ public class DurabilityIT {
         assertAllAckedWritesReadable(writers.acked);
     }
 
-    // ------------------------------------------------------------------
-    // Test 2: everything dies.
-    // ------------------------------------------------------------------
-
-    /**
-     * Stop all three nodes and bring them back against the same on-disk state.
-     *
-     * This one targets DURABILITY rather than availability. With a single node
-     * killed, an acknowledged write can survive purely in another node's memory
-     * and the test would still pass with a broken WAL. Killing all three removes
-     * that hiding place: an acked write can only come back by being replayed
-     * from a WAL on disk.
-     *
-     * WHAT THIS DOES NOT PROVE -- read this before quoting the test.
-     *
-     * It proves LOGICAL durability: no acknowledged write is lost to truncation
-     * bugs, commit-index errors, log reconciliation, or a broken replay path.
-     *
-     * It does NOT prove PHYSICAL durability, i.e. that fsync happened before the
-     * acknowledgement. stopNode() shuts threads down in-process; there is no JVM
-     * kill and no power loss, so anything written but not force()ed is still in
-     * the OS page cache, which outlives a process. This test would still pass
-     * with force(true) deleted from WalService.
-     *
-     * Closing that gap needs a WalService test double that DISCARDS unforced
-     * writes on "crash" -- which in turn needs WalService to be injectable into
-     * RaftNode instead of constructed by it. Until then, claim the logical
-     * property and not the physical one.
-     */
+    /*
+    *  if all the nodes restart still the acknowledged wrties rae readable
+    */
     @Test
     public void acknowledgedWritesSurviveFullClusterRestart() throws Exception {
         cluster.start();
@@ -159,19 +114,7 @@ public class DurabilityIT {
         assertAllAckedWritesReadable(writers.acked);
     }
 
-    // ------------------------------------------------------------------
-    // shared verification
-    // ------------------------------------------------------------------
 
-    /**
-     * Wait for the cluster to finish applying, then check every acked key on
-     * every running node.
-     *
-     * Deliberately reports the first few missing keys rather than just a count:
-     * "3 keys missing" sends you looking at the wrong layer, whereas "k-41,
-     * k-42, k-43 missing on node2" tells you it was a contiguous tail and points
-     * straight at truncation.
-     */
     private void assertAllAckedWritesReadable(Set<String> acked) {
         assertTrue("no writes were ever acknowledged -- the test proved nothing", acked.size() > 0);
         LOGGER.info("verifying {} acknowledged writes on {} nodes", acked.size(), cluster.runningNodes().size());
@@ -208,17 +151,6 @@ public class DurabilityIT {
         return c.serialize();
     }
 
-    // ------------------------------------------------------------------
-    // load generator
-    // ------------------------------------------------------------------
-
-    /**
-     * Writers that re-resolve the leader on every attempt.
-     *
-     * The value written is the key itself, so verification catches a wrong value
-     * and not just a missing one -- that distinguishes "the entry was lost" from
-     * "the entries were applied in the wrong order", which are different bugs.
-     */
     private final class Writers {
         final Set<String>   acked   = ConcurrentHashMap.newKeySet();
         final AtomicInteger failed  = new AtomicInteger();
@@ -263,7 +195,6 @@ public class DurabilityIT {
             }
         }
 
-        /** Block until at least {@code target} writes have been acknowledged. */
         void awaitAcks(int target, long timeoutMs) throws InterruptedException {
             long deadline = System.currentTimeMillis() + timeoutMs;
             while (acked.size() < target) {

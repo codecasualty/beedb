@@ -379,8 +379,9 @@ public class RaftNode{
     // and we will lose uncommited entry.
     private void  appendNoOpEntryToLog(){
         CompletableFuture<Void> walfuture = null;
+        LogEntry noOpEntry = null;
         synchronized(this){ 
-            LogEntry noOpEntry = getNoOpEntry();
+            noOpEntry = getNoOpEntry();
             log.append(noOpEntry);
             walfuture = walService.append(new WalRecord(EntryType.ENTRY , noOpEntry, 0));
         }
@@ -389,6 +390,10 @@ public class RaftNode{
         // waiting outside synchronized block
         try{
             walfuture.get(5 , TimeUnit.SECONDS);
+            synchronized(this){
+                persistedWalIndex = Math.max(persistedWalIndex, noOpEntry.getIndex());
+            }
+
         }catch(Exception e){
             LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
                 "while appending entry to wal , please check stack trace ", e);
