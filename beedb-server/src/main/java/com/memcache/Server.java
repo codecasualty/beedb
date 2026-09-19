@@ -7,6 +7,7 @@
 
 package com.memcache;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -58,6 +59,9 @@ public class Server implements AutoCloseable{
     private static final long MAX_RELATIVE_EXPIRY_SECONDS = 30L * 24 * 60 * 60;
     public static void main(String[] args) throws IOException{
         // read file name
+        if(args.length == 0){
+            configError("usage: java -jar beedb-server.jar <node>.properties");
+        }
         String fileName = args[0];
         // read properties file
         Properties properties = new Properties();
@@ -66,17 +70,18 @@ public class Server implements AutoCloseable{
             Server server = new Server();
         ){
             properties.load(fileInputStream);
-            
-            ArrayList<String> peers = new ArrayList<>();
-            for(String peer : properties.getProperty("peers").split(",")){
-                peers.add(peer);
-            }
+
+            ArrayList<String> peers = parsePeers(properties.getProperty("peers"));
             // if properties values are absent then we use default values
 
             Runtime.getRuntime().addShutdownHook(new Thread(server::close));
             String nodeId = properties.getProperty("nodeId", "node1");
-            int clientPort = Integer.parseInt(properties.getProperty("clientPort"));
-            int raftPort = Integer.parseInt(properties.getProperty("raftPort"));
+            int clientPort = requiredPort(properties, "clientPort");
+            int raftPort = requiredPort(properties, "raftPort");
+            if(clientPort == raftPort){
+                throw new IllegalArgumentException("clientPort and raftPort are both " + clientPort
+                    + "; a node cannot serve clients and raft on one port");
+            }
             String stateDir = properties.getProperty("stateDir" , "state");
             String snapshotDir = properties.getProperty("snapshotDir" , "snapshot");
             String tmpDir = properties.getProperty("tmpDir" , "tmp");
@@ -94,10 +99,13 @@ public class Server implements AutoCloseable{
             LOGGER.debug("clientPort is {} and raftPort is {} and peers is {} ", clientPort , raftPort, peers);
             LOGGER.debug("stateDir is {} and snapshotDir is {} and tmpDir is {} and walDir is {} ", stateDir , snapshotDir, tmpDir, walDir);
             LOGGER.debug("snapShotLimit is {} and snapShotThreshold is {} and minElectionTimeout is {} and maxElectionTimeout is {} and heartbeatInterval is {} ", snapShotLimit, snapShotThreshold, minElectionTimeout, maxElectionTimeout, heartbeatInterval);
-            if(clientPort == 0 || raftPort == 0 || peers.size() == 0){
-                throw new IllegalArgumentException("clientPort and raftPort must be provided");
-            }
             server.start(peers, nodeId , clientPort , raftPort, stateDir, snapshotDir, tmpDir, walDir, snapShotLimit, snapShotThreshold, minElectionTimeout, maxElectionTimeout, heartbeatInterval, peerRetryBackoffInitialMs, peerRetryBackoffMaxMs);
+        }catch(IllegalArgumentException e){
+            // every config problem lands here: the node never starts, so it can
+            // never sit in the cluster listening but unable to take part.
+            configError(e.getMessage());
+        }catch(FileNotFoundException e){
+            configError("config file not found: " + fileName);
         }catch(Exception e){
             LOGGER.error("something is wrong {}",e);
             System.exit(1);
@@ -105,6 +113,62 @@ public class Server implements AutoCloseable{
         
     }
     
+    /**
+     * peers is "host:port,host:port"
+     */
+    private static ArrayList<String> parsePeers(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalArgumentException(
+                "peers is required, e.g. peers=127.0.0.1:12222,127.0.0.1:12223");
+        }
+        ArrayList<String> peers = new ArrayList<>();
+        for (String entry : raw.split(",")) {
+            String peer = entry.trim();
+            if (peer.isEmpty()) {
+                throw new IllegalArgumentException("peers has an empty entry: '" + raw + "'");
+            }
+            // lastIndexOf, not indexOf: an IPv6 literal has colons of its own
+            int colon = peer.lastIndexOf(':');
+            if (colon <= 0 || colon == peer.length() - 1) {
+                throw new IllegalArgumentException("peer '" + peer + "' must be host:port");
+            }
+            parsePort(peer.substring(colon + 1), "port of peer '" + peer + "'");
+            if (peers.contains(peer)) {
+                throw new IllegalArgumentException("peers lists '" + peer + "' twice");
+            }
+            peers.add(peer);
+        }
+        return peers;
+    }
+
+    /** A port this node binds. Must be present, numeric and a real port number. */
+    private static int requiredPort(Properties properties, String key) {
+        String raw = properties.getProperty(key);
+        if (raw == null) {
+            throw new IllegalArgumentException("property '" + key + "' is required");
+        }
+        return parsePort(raw, key);
+    }
+
+    private static int parsePort(String raw, String what) {
+        int value;
+        try {
+            value = Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(what + " is not a number: '" + raw.trim() + "'");
+        }
+        if (value < 1 || value > 65535) {
+            throw new IllegalArgumentException(what + " is out of range: " + value);
+        }
+        return value;
+    }
+
+    private static void configError(String message) {
+        LOGGER.error("bad configuration: {}", message);
+        System.err.println("bad configuration: " + message);
+        System.exit(2);
+    }
+
     private static int intProperty(Properties properties, String key, int defaultValue) {
         String raw = properties.getProperty(key);
         if (raw == null) {

@@ -1,6 +1,7 @@
 package com.memcache.gateway.supervisor;
 
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -37,7 +38,7 @@ public class ProcessNodeSupervisor implements NodeSupervisor {
     @Override
     public void kill(String nodeId) throws NodeCouldNotBeKilled {
         if(nodeId == null || !nodeIds.contains(nodeId)) throw new NodeCouldNotBeKilled("node "+nodeId+" is not in the set of nodes to kill");
-        String pattern = "Dnode\\.id="+nodeId+" .*com\\.memcache\\.Server";
+        String pattern = "Dnode\\.id="+nodeId+" -jar .*beedb-server.*\\.jar";
         try {
             Process process = new ProcessBuilder(List.of("pkill", "-f", pattern)).redirectErrorStream(true).start();
             if(!process.waitFor(PKILL_TIMEOUT_SECONDS, TimeUnit.SECONDS)){
@@ -68,7 +69,7 @@ public class ProcessNodeSupervisor implements NodeSupervisor {
     }
 
     private void chaosRestore(String nodeId) throws IOException{
-        String cp = Files.readString(serverDirectory.resolve("target/classpath.txt")).trim();
+        Path jar = serverJar();
         // stdout is discarded: logback's CONSOLE appender writes every log line there, and
         // logs/<node>.log already has them, rotated. stderr goes to a file instead it
         // stays empty unless the JVM dies of something only stderr sees, such as an
@@ -77,12 +78,27 @@ public class ProcessNodeSupervisor implements NodeSupervisor {
         Files.createDirectories(err.getParent());
         new ProcessBuilder(List.of(
         "setsid", "java", "-Dnode.id=" + nodeId,
-        "-cp", "target/classes:" + cp,
-        "com.memcache.Server", nodeId + ".properties"))
+        "-jar", jar.toString(), nodeId + ".properties"))
             .directory(serverDirectory.toFile())
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.appendTo(err.toFile()))
             .start(); 
+    }
+
+    /**
+     * the shaded jar in the server module's target/. found by glob rather than by a
+     * hard-coded version, so a version bump in the pom does not silently stop chaos
+     * from restoring nodes.
+     */
+    private Path serverJar() throws IOException {
+        Path target = serverDirectory.resolve("target");
+        try (DirectoryStream<Path> jars = Files.newDirectoryStream(target, "beedb-server-*.jar")) {
+            for (Path jar : jars) {
+                return jar;
+            }
+        }
+        throw new IOException("no beedb-server jar in " + target.toAbsolutePath()
+            + " -- run `make package` in the server module first");
     }
     
 }

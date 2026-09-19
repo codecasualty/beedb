@@ -13,6 +13,7 @@ import com.memcache.gateway.kv.KeyRegistry;
 import com.memcache.gateway.kv.WriteRateLimiter;
 import com.memcache.gateway.supervisor.NodeSupervisor;
 import com.memcache.gateway.supervisor.ProcessNodeSupervisor;
+import com.memcache.gateway.supervisor.SystemdNodeSupervisor;
 
 import ch.qos.logback.core.pattern.parser.Node;
 
@@ -76,6 +77,12 @@ public class BeedbConfig {
 
         private int restartAfterSeconds = 15;
 
+        /** "process" on a laptop (nodes started by make), "systemd" on a server. */
+        private String supervisor = "process";
+
+        /** Only read when supervisor=systemd. %s is the node id. */
+        private String systemdUnitPattern = "beedb-node@%s.service";
+
 
         public int getKeyTtlSeconds() { return keyTtlSeconds; }
         public void setKeyTtlSeconds(int keyTtlSeconds) { this.keyTtlSeconds = keyTtlSeconds; }
@@ -97,6 +104,10 @@ public class BeedbConfig {
         public void setSupervisorServerDir(String supervisorServerDir) { this.supervisorServerDir = supervisorServerDir; }
         public int getRestartAfterSeconds() { return restartAfterSeconds; }
         public void setRestartAfterSeconds(int restartAfterSeconds) { this.restartAfterSeconds = restartAfterSeconds; }
+        public String getSupervisor() { return supervisor; }
+        public void setSupervisor(String supervisor) { this.supervisor = supervisor; }
+        public String getSystemdUnitPattern() { return systemdUnitPattern; }
+        public void setSystemdUnitPattern(String systemdUnitPattern) { this.systemdUnitPattern = systemdUnitPattern; }
 
         public Map<String, String> getNodes() {
             return nodes;
@@ -150,6 +161,14 @@ public class BeedbConfig {
         Set<String> nodeIds = beedbProperties.getNodes().keySet();
         String supervisorServerDir = beedbProperties.getSupervisorServerDir();
         int restartAfterSeconds = beedbProperties.getRestartAfterSeconds();
+        String supervisor = beedbProperties.getSupervisor();
+        if ("systemd".equalsIgnoreCase(supervisor)) {
+            return new SystemdNodeSupervisor(Set.copyOf(nodeIds),
+                beedbProperties.getSystemdUnitPattern(), restartAfterSeconds);
+        }
+        if (!"process".equalsIgnoreCase(supervisor)) {
+            throw new IllegalStateException("beedb.supervisor must be 'process' or 'systemd', got: " + supervisor);
+        }
         return new ProcessNodeSupervisor(Set.copyOf(nodeIds), Path.of(supervisorServerDir), restartAfterSeconds);
     }
 
