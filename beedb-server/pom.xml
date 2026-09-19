@@ -49,6 +49,49 @@
           </execution>
         </executions>
       </plugin>
+
+      <!--  one self-contained jar: classes plus every runtime
+           dependency, so the node runs as `java -jar beedb-server.jar
+           <node>.properties` on any machine with a JVM and no ~/.m2.
+           Test-scope jars (JUnit, Hamcrest) are excluded by shade itself. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <!-- signatures cover each original jar; merging invalidates
+                         them and the JVM then refuses to load the classes. -->
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.memcache.Server</mainClass>
+                </transformer>
+                <!-- Several jars ship META-INF/services entries under the same
+                     name; without this the last one wins and ServiceLoader
+                     lookups (logback's provider, Jackson's) silently break. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
 
     <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->

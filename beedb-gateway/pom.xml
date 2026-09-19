@@ -15,6 +15,20 @@
   <artifactId>beedb-gateway</artifactId>
   <name>beedb-gateway</name>
 
+  <!-- beedb-server is plain Java and spring's bom should live here , it
+       should not inherit Spring's opinion about jackson, logback and the rest from parent -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>${spring.boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <!-- No <version> elements below: the parent's <dependencyManagement> supplies them -->
   <dependencies>
     <dependency>
