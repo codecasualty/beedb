@@ -60,7 +60,7 @@
         </encoder>
     </appender>
 
-    <logger name="METRICS" level="INFO" additivity="false">
+    <logger name="METRICS" level="OFF" additivity="false">
         <appender-ref ref="METRICS_FILE"/>
     </logger>
 

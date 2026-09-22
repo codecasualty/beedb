@@ -691,35 +691,24 @@ public class RaftNode{
                 }
                 // we have to wait for the response from wal node
                 // .get() blocks until response is available so we have used timeout
-                // waiting outside synchronized block
-            }
-            if(walfuture != null){
-                try{
-                    walfuture.get(5 , TimeUnit.SECONDS);
-                }catch(Exception e){
-                    LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
-                        "while appending entry to wal , please check stack trace ", e);
-                    MDC.remove("requestId");
-                    return response;
-                }
-            }
-            
-            synchronized(this){
-                log.truncateFrom(request.getPrevLogIndex() + 1);
-            
+                
                 // we have to append all the entries in the request to our wal log and then wait for it complete
                 for(LogEntry entry : request.getEntries()){
                     walfuture = walService.append(new WalRecord(EntryType.ENTRY , entry, 0));
                 }
+                // waiting outside synchronized block
+                /*
+                breaking change of sept22 2026
+                the reason we have segregated wal and log append is because wal is a single threaded
+                so there is chance that while we are truncating our log , and releasing lock on raftlog
+                apply loop runs and tries to read entries which is < commit index and we might not have that
+                entry in our log and that will raise array index out of bounds exception while reading from log
+                and this exception will failstop our system
+                */
             }
-            // we have to wait for the response from wal node
-            // .get() blocks until response is available so we have used timeout
-            // waiting outside synchronized block
             if(walfuture != null){
                 try{
-                    long t0 = System.nanoTime();
                     walfuture.get(5 , TimeUnit.SECONDS);
-                    METRICS.info("METRIC wal_append waitUs={} entries={}", TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t0), request.getEntries().size());
                 }catch(Exception e){
                     LOGGER.error("TIMED OUT/Interrupted/Execution Exception \n" +
                         "while appending entry to wal , please check stack trace ", e);
@@ -728,6 +717,9 @@ public class RaftNode{
                 }
             }
             synchronized(this){
+                if(log.lastIndex() >= request.getPrevLogIndex() + 1){
+                    log.truncateFrom(request.getPrevLogIndex() + 1);
+                }
                 
                 for(LogEntry entry : request.getEntries()){
                     log.append(entry);
@@ -1015,6 +1007,7 @@ public class RaftNode{
                 // our clients/leaders entries are applied from index 1 not 0 therefore we are incrementing lastApplied by 1
                 // also our inserts in log are at log.lastIndex() + 1 not log.lastIndex() so this helps us to get the correct index
                 lastApplied++;
+                if(lastApplied > log.lastIndex()) throw new RuntimeException("commit index is greater than last applied index");
                 LogEntry entry = log.get(lastApplied);
                 MDC.put("requestId",  entry.getRequestId());
                 Response response = null;
