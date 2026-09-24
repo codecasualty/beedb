@@ -23,3 +23,5 @@ beedb-server/test.txt
 .classpath
 .project
 .settings/
+
+deploy/
