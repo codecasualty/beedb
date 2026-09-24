@@ -110,6 +110,8 @@ public class RaftNode{
 
     // locks and conditions for waking up replication threads from sleeping heartbeat intervals
     private final ReentrantLock replicationLock = new ReentrantLock();
+    private final ReentrantLock appendLock = new ReentrantLock();
+    private CompletableFuture<Void> lastFollowerWalWrite = CompletableFuture.completedFuture(null);
     private final Condition notNewElements = replicationLock.newCondition();
     
     
@@ -184,19 +186,21 @@ public class RaftNode{
     // and still the problem of deadlock is not solved
     // so we are using synchronized blocks whenever required
     private void startElection(){
+        long currentElectionTerm = currentTerm;
         synchronized(this){
             if(isLeader()) return;
             leaderId = null;
             transitionToCandidate();
             LOGGER.info("startElection for term {} by {}", currentTerm, nodeId);
             resetElectionTimer(); 
+            currentElectionTerm = currentTerm;
         }
         // below method is synchronized internally and so we dont need to add this in synchronized block
         int votes = requestVoteFromPeers();
         LOGGER.debug("total received votes are {}", votes);
         // because peerAddresses does not include our own address therefore we are adding + 1
         synchronized(this){
-            if(isMajority(votes)){
+            if(currentElectionTerm == currentTerm && isCandidate() && isMajority(votes)){
                 becomeLeader();
                 // i dont think we should send hearbeats here , the job of this function should be to start the election and decide the outcome
                 // sendHeartbeats();
@@ -417,6 +421,7 @@ public class RaftNode{
         MDC.put("nodeId", nodeId);
         LOGGER.debug("term {} node id {} replication loop for peer {} & current node is leader {} ", currentTerm, nodeId, peer, isLeader());
         while(isLeader()){
+            boolean nextIndexUpdated = false;
             try{
 
                 // making a decision to either send appendentries to peer or installsnapshot to peer
@@ -440,7 +445,7 @@ public class RaftNode{
                                 stepDownDueToHigherTerm(term);
                                 return;
                             }
-                            updatePeerState(response , peer);
+                            nextIndexUpdated = updatePeerState(response , peer);
                             mayBeAdvanceCommitIndex();
                             networkFailureSleepTime = peerRetryBackoffInitialMs;
                         }
@@ -481,7 +486,7 @@ public class RaftNode{
                                 stepDownDueToHigherTerm(term);
                                 return;
                             }
-                            updatePeerState(response , peer);
+                            nextIndexUpdated = updatePeerState(response , peer);
                             mayBeAdvanceCommitIndex();
                             networkFailureSleepTime = peerRetryBackoffInitialMs;
                         }
@@ -496,6 +501,17 @@ public class RaftNode{
                         }
                     }
                 }
+                if(!nextIndexUpdated && peers.get(peer).getNextIndex() <= log.lastIndex()){
+                    // next index couldnt be updated, either by timeout or follower is busy and its behind our 
+                    // currext last log index, so dont bombard follower with heartbeats/appendentries
+                    // short pause, not heartbeatInterval: this also fires on 200ms rpc timeouts and a
+                    // 300ms stall there cost ~8% write throughput; resends are cheap now (no wal rewrite)
+                    try{
+                        Thread.sleep(20);
+                    }catch(InterruptedException e){
+                        LOGGER.debug(" new elements are found but we are interrupted {} ", e);
+                    }   
+                }   
             }catch(Exception e){
                 LOGGER.error("exception in replication loop for peer {} , please check stack trace ", peer, e);
                 try {
@@ -553,18 +569,23 @@ public class RaftNode{
     // so its better to use concurrent map or use synchronized methods to avoid race conditions.
     // for example one thread trying to read some other entry in this updatepeerstate , but some other thread in some other method trying to read that same entry both can have
     // inconsistent info/result available which would be difficult to trace without proper synchronization mechanism
-    private synchronized void updatePeerState(Object response, String peer){
+    private synchronized boolean updatePeerState(Object response, String peer){
         String peerAddress = peer;
+        boolean nextIndexUpdated = false;
         int nextMatchIndex = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getMatchIndex() : ((InstallSnapshotResponse)response).getAppliedIndex();
         boolean success  = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).isSuccess() : ((InstallSnapshotResponse)response).isSuccess();
         int conflictTermFirstIndex = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getConflictTermFirstIndex() : -1;
         long conflictTerm = response instanceof AppendEntriesResponse ? ((AppendEntriesResponse)response).getConflictTerm() : -1;
         PeerState state = peers.get(peerAddress);
+        int currentMatchIndex = state.getMatchIndex();
+        int currentNextIndex = state.getNextIndex();
         LOGGER.debug("term {} and node id {} updating peer {} state {} ", currentTerm, nodeId, peer, state);
         LOGGER.debug("term {} and node id {} match index {} next index {} success {} ", currentTerm, nodeId, state.getMatchIndex(), state.getNextIndex(), success);
         LOGGER.debug("term {} and node id {} response {} ", currentTerm, nodeId, response);
         if(nextMatchIndex > state.getMatchIndex()) state.setMatchIndex(nextMatchIndex);
-        if(success) state.setNextIndex(state.getMatchIndex() + 1);
+        if(success) {
+            state.setNextIndex(state.getMatchIndex() + 1);
+        }
         else if(state.getNextIndex() > 1 ) {
             if(response instanceof AppendEntriesResponse && conflictTermFirstIndex != -1 && conflictTerm != -1){
                 if(log.termAt(conflictTermFirstIndex) == conflictTerm && conflictTermFirstIndex <= log.lastIndex() && conflictTermFirstIndex >= log.getLastIncludedIndex()){
@@ -576,7 +597,8 @@ public class RaftNode{
                 state.setNextIndex(state.getMatchIndex() + 1);
             }
         }
-
+        if(state.getNextIndex() != currentNextIndex || state.getMatchIndex() > currentMatchIndex) nextIndexUpdated = true;
+        return nextIndexUpdated;
     }
     // this method shouldn't be synchronized because we are using virtual threads to replicate the log and we dont want to block the main thread
     // and each virtual thread is handling replication to single node, so there is no need of synchronization among them.
@@ -651,11 +673,12 @@ public class RaftNode{
         MDC.put("nodeId", nodeId);
         if(!request.getEntries().isEmpty())
             MDC.put("requestId", request.getEntry(0).getRequestId());
+        appendLock.lock();
         try{
-
             LOGGER.debug("term {} node id {} handling append entries request {} ", currentTerm, nodeId, request);
             CompletableFuture<Void> walfuture = null;
             AppendEntriesResponse response = builAppendEntriesResponse();
+            int inflectionPoint = -1;
             synchronized(this){
                 if(request.getTerm() < currentTerm){
                     return response;
@@ -685,17 +708,47 @@ public class RaftNode{
                     }
                     return response;
                 }
-                // if the node which is asking us to append entry has updated log then we can safely append it in our log
-                if(log.lastIndex() >= request.getPrevLogIndex() + 1){
-                    walfuture = walService.append(new WalRecord(EntryType.TRUNCATE , null, request.getPrevLogIndex() + 1));
+                /*
+                * there can be a case where the leader is resending the same batch of entries again and again
+                * in such case we have iterate through those entries and figure where is inflection point (a point 
+                * after which we dont have those entries anymore) and then we can truncate the log from that point
+                * and then we can append the new entries and then we can update our commit index as well
+                */
+
+                for(int i = 0;i < request.getEntries().size();i++){
+                    LogEntry entry = request.getEntries().get(i);
+                    if(entry.getIndex() > log.lastIndex()){
+                        inflectionPoint = i;
+                        break;
+                    }
+                    if(entry.getIndex() >= log.getLastIncludedIndex() && entry.getTerm() != log.termAt(entry.getIndex())){
+                        LOGGER.debug("term at index {} is {} and request term is {} ", entry.getIndex(), log.termAt(entry.getIndex()), entry.getTerm());
+                        inflectionPoint = i;
+                        walfuture = walService.append(new WalRecord(EntryType.TRUNCATE , null,  request.getEntry(inflectionPoint).getIndex()));
+                        break;
+                    }
                 }
+                LOGGER.debug("inflection point is {} ", inflectionPoint);
+
+                // if there is nothing to truncate then just ignore 
+                // if(inflectionPoint != request.getEntries().size()){
+                // }
+                if(inflectionPoint != -1)
+                for(int i = inflectionPoint; i < request.getEntries().size(); i++){
+                    walfuture = walService.append(new WalRecord(EntryType.ENTRY , request.getEntry(i), 0));
+                }
+
+                // if the node which is asking us to append entry has updated log then we can safely append it in our log
+                // if(log.lastIndex() >= request.getPrevLogIndex() + 1 && log.termAt(log.lastIndex()) != request.getTerm()){
+                //     walfuture = walService.append(new WalRecord(EntryType.TRUNCATE , null, request.getPrevLogIndex() + 1));
+                // }
                 // we have to wait for the response from wal node
                 // .get() blocks until response is available so we have used timeout
                 
                 // we have to append all the entries in the request to our wal log and then wait for it complete
-                for(LogEntry entry : request.getEntries()){
-                    walfuture = walService.append(new WalRecord(EntryType.ENTRY , entry, 0));
-                }
+                // for(LogEntry entry : request.getEntries()){
+                //     walfuture = walService.append(new WalRecord(EntryType.ENTRY , entry, 0));
+                // }
                 // waiting outside synchronized block
                 /*
                 breaking change of sept22 2026
@@ -705,6 +758,21 @@ public class RaftNode{
                 entry in our log and that will raise array index out of bounds exception while reading from log
                 and this exception will failstop our system
                 */
+               if(inflectionPoint != -1 && request.getEntry(inflectionPoint).getIndex() <= log.lastIndex()){
+                   LOGGER.debug("log entries are truncated from index {} to index {}", request.getEntry(inflectionPoint).getIndex(), log.lastIndex());
+                   log.truncateFrom(request.getEntry(inflectionPoint).getIndex());
+               }
+               if(inflectionPoint != -1)
+               log.appendAll(request.getEntries(inflectionPoint, request.getEntries().size()));
+
+               if(walfuture != null){
+                // we queued something: this is now the newest write
+                    lastFollowerWalWrite = walfuture;         
+                }else if(!lastFollowerWalWrite.isDone()){
+                // nothing new, but an earlier write is still in flight
+                    walfuture = lastFollowerWalWrite;         
+                }
+
             }
             if(walfuture != null){
                 try{
@@ -717,28 +785,31 @@ public class RaftNode{
                 }
             }
             synchronized(this){
-                if(log.lastIndex() >= request.getPrevLogIndex() + 1){
-                    log.truncateFrom(request.getPrevLogIndex() + 1);
-                }
-                
-                for(LogEntry entry : request.getEntries()){
-                    log.append(entry);
-                }
+                // if(log.lastIndex() >= request.getPrevLogIndex() + 1 && log.termAt(log.lastIndex()) != request.getTerm()){
+                //     log.truncateFrom(request.getPrevLogIndex() + 1);
+                // }
+                // for(LogEntry entry : request.getEntries()){
+                //     log.append(entry);
+                // }
             
                 // as we have updated our log , we need to move/change our commit index as well
                 if(request.getLeaderCommit() > commitIndex){
-                    commitIndex = Math.min(request.getLeaderCommit() , log.lastIndex());
+                    commitIndex = Math.max(commitIndex, Math.min(request.getLeaderCommit(), request.getPrevLogIndex() + request.getEntries().size()));
+
                 }
                 // because we are sure our wal succeeded and persisted wal idnex denotes which/how many entries are successfully persisted in wal
                 // and in this case the las log index denotes the same
-                persistedWalIndex = log.lastIndex();
+                persistedWalIndex = Math.max(persistedWalIndex, request.getPrevLogIndex() + request.getEntries().size());
+
         
                 // using apply executor to apply entrires in cache , this is single threaded executor because we dont want multiple
                 // threads trying to change cache state as order of opeartions are importnat.
                 // we just notify waiting applyexecutor thread and that's all rest of things will be taken care by woken up thread.
                 this.notifyAll();
-                // match index tell the leader to sent next index  = log.lastlogindex + 1
-                response.setMatchIndex(log.lastIndex());
+                // this means followers has entries till its prevlogindex and append entires set in this request
+                // just sending lastlog index is not correct because there might be some uncommitted entries from older leader which needs
+                // to be removed
+                response.setMatchIndex(request.getPrevLogIndex() + request.getEntries().size());
                 response.setSuccess(true);
                 response.setTerm(currentTerm);
                 LOGGER.debug("term {} node id {} enteries appended in log response {} ", currentTerm, nodeId, response);
@@ -747,6 +818,7 @@ public class RaftNode{
             return response;
         }finally{
             MDC.remove("requestId");
+            appendLock.unlock();
         }
 
     }
@@ -776,62 +848,68 @@ public class RaftNode{
         MDC.put("nodeId", nodeId);
         MDC.put("requestId", request.getRequestId());
         LOGGER.debug("Install snapshot request is {} ", request);
-        InstallSnapshotResponse response = buildInstallSnapshotResponse();
-        synchronized(this){
-            // now the node who is asking for votes has seen more term than us, it means it can be updated but we have to check that
-            if(request.getTerm() < currentTerm){
-                LOGGER.debug("term {} node id {} install snapshot request is less than current term {} ", request.getTerm(), nodeId, currentTerm);
-                return response;
-            }
-            if(request.getTerm() > currentTerm){
-                stepDownDueToHigherTerm(request.getTerm());
-                response.setTerm(request.getTerm());
-            }
-
-            transitionToFollower();
-            leaderId = request.getLeaderId();
-            resetElectionTimer();
-            
-            if(request.getLastIncludedIndex() <= lastApplied){
-                LOGGER.debug("NACK Install snapshot request as term {} is less than current term {} or lastApplied {} is less than lastIncludedIndex {} ", request.getTerm(), currentTerm, lastApplied, request.getLastIncludedIndex());
-                response.setAppliedIndex(lastApplied);
-                return response;
-            }
-            final Map<String, CacheItem> cacheState = request.getCacheState();
-            Map<String , String> saved = MDC.getCopyOfContextMap();
-            // Thread.ofVirtual().start(() -> {
-                if(saved != null) MDC.setContextMap(saved);
-                LOGGER.debug("lastApplied is {} and request.getLastIncludedIndex() is {} lastIncludedTerm is {} nodeId is {} ", lastApplied, request.getLastIncludedIndex(), request.getLastIncludedTerm(), nodeId);
-                LOGGER.debug("cache state is {} ", cacheState);
-                boolean snapshotStatus = raftSnapshotManager.serialize(cacheState, request.getLastIncludedIndex(), request.getLastIncludedTerm(), nodeId);
-                LOGGER.debug("before entering snapshot status is {} ", snapshotStatus);
-                synchronized(this){
-                    LOGGER.debug("snapshot status is {} ", snapshotStatus);
-                    if(snapshotStatus == true){
-                        log = new RaftLog(request.getLastIncludedIndex(), request.getLastIncludedTerm());
-                        log.setLastIncludedIndex(request.getLastIncludedIndex());
-                        log.setLastIncludedTerm(request.getLastIncludedTerm());
-                        cache.restoreState(request.getCacheState());
-                        lastApplied = request.getLastIncludedIndex();
-                        commitIndex = request.getLastIncludedIndex();
-                        // last applied means how many we have applied to our cache , from our logs , but this is cache restoration , 
-                        // we havent  applied from our logs, so increasing last applied would be wrong, 
-                        LOGGER.debug("lastApplied is {} and commitIndex is {} ", lastApplied, commitIndex);
-                        // below applied index means they are successfully applied to cache, it has nothing to do with our raft logs size.
-                        response.setAppliedIndex(request.getLastIncludedIndex());
-                        response.setTerm(currentTerm);
-                        response.setSuccess(true);
-                        persistedWalIndex = log.lastIndex();
-
-
-                    }
+        appendLock.lock();
+        try{
+            InstallSnapshotResponse response = buildInstallSnapshotResponse();
+            synchronized(this){
+                // now the node who is asking for votes has seen more term than us, it means it can be updated but we have to check that
+                if(request.getTerm() < currentTerm){
+                    LOGGER.debug("term {} node id {} install snapshot request is less than current term {} ", request.getTerm(), nodeId, currentTerm);
+                    return response;
                 }
-            // });
+                if(request.getTerm() > currentTerm){
+                    stepDownDueToHigherTerm(request.getTerm());
+                    response.setTerm(request.getTerm());
+                }
+
+                transitionToFollower();
+                leaderId = request.getLeaderId();
+                resetElectionTimer();
+                
+                if(request.getLastIncludedIndex() <= lastApplied){
+                    LOGGER.debug("NACK Install snapshot request as term {} is less than current term {} or lastApplied {} is less than lastIncludedIndex {} ", request.getTerm(), currentTerm, lastApplied, request.getLastIncludedIndex());
+                    response.setAppliedIndex(lastApplied);
+                    return response;
+                }
+                final Map<String, CacheItem> cacheState = request.getCacheState();
+                Map<String , String> saved = MDC.getCopyOfContextMap();
+                // Thread.ofVirtual().start(() -> {
+                    if(saved != null) MDC.setContextMap(saved);
+                    LOGGER.debug("lastApplied is {} and request.getLastIncludedIndex() is {} lastIncludedTerm is {} nodeId is {} ", lastApplied, request.getLastIncludedIndex(), request.getLastIncludedTerm(), nodeId);
+                    LOGGER.debug("cache state is {} ", cacheState);
+                    boolean snapshotStatus = raftSnapshotManager.serialize(cacheState, request.getLastIncludedIndex(), request.getLastIncludedTerm(), nodeId);
+                    LOGGER.debug("before entering snapshot status is {} ", snapshotStatus);
+                    synchronized(this){
+                        LOGGER.debug("snapshot status is {} ", snapshotStatus);
+                        if(snapshotStatus == true){
+                            log = new RaftLog(request.getLastIncludedIndex(), request.getLastIncludedTerm());
+                            log.setLastIncludedIndex(request.getLastIncludedIndex());
+                            log.setLastIncludedTerm(request.getLastIncludedTerm());
+                            cache.restoreState(request.getCacheState());
+                            lastApplied = request.getLastIncludedIndex();
+                            commitIndex = request.getLastIncludedIndex();
+                            // last applied means how many we have applied to our cache , from our logs , but this is cache restoration , 
+                            // we havent  applied from our logs, so increasing last applied would be wrong, 
+                            LOGGER.debug("lastApplied is {} and commitIndex is {} ", lastApplied, commitIndex);
+                            // below applied index means they are successfully applied to cache, it has nothing to do with our raft logs size.
+                            response.setAppliedIndex(request.getLastIncludedIndex());
+                            response.setTerm(currentTerm);
+                            response.setSuccess(true);
+                            persistedWalIndex = log.lastIndex();
+
+
+                        }
+                    }
+                // });
+            }
+            LOGGER.debug("sending install snapsthot response {} ", response);
+            return response;
+        }finally{
+            MDC.remove("requestId");
+            appendLock.unlock();
         }
-        LOGGER.debug("sending install snapsthot response {} ", response);
         
 
-        return response;
     }
 
     public InstallSnapshotResponse buildInstallSnapshotResponse(){
@@ -920,13 +998,12 @@ public class RaftNode{
             }finally{
                 replicationLock.unlock();
             }
-
+            return future;
         }finally{
             MDC.remove("requestId");
             MDC.remove("nodeId");
         }
 
-        return future;
     }
 
     /**

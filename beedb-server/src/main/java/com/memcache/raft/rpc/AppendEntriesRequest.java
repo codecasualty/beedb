@@ -82,6 +82,10 @@ public class AppendEntriesRequest {
     public LogEntry getEntry(int index){
         return entries.get(index);
     }
+
+    public List<LogEntry> getEntries(int fromIndex, int toIndex){
+        return entries.subList(fromIndex, toIndex);
+    }
     
     public String toString(){
         return "AppendEntriesRequest{" +

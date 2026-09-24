@@ -374,6 +374,7 @@ public class WalService {
                         raftlog.removeIf(e -> e.getIndex() >= fromIndex);
                         
                     } else if (logEntry != null && logEntry.getIndex() > index) {
+                        raftlog.removeIf(e -> e.getIndex() >= logEntry.getIndex());
                         raftlog.add(logEntry);                            
                     }
                 }else{
