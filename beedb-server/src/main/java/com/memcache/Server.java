@@ -459,8 +459,8 @@ public class Server implements AutoCloseable{
             }
             else{
                 command.setExpiry(absoluteExpiryMillis(command.getExpiry(), System.currentTimeMillis())); 
-                LOGGER.info("command type is {}", command.getType());
-                LOGGER.info("command is {}", command);
+                LOGGER.debug("command type is {}", command.getType());
+                LOGGER.debug("command is {}", command);
                 // we have to propose this command to raft node
                 // and get the output future from propose method
                 Future<String> future = raftNode.propose(command.serialize());
