@@ -268,7 +268,13 @@ above 186 KB and the commit index moved forward in every 10-minute sample.
 - For that reason `APPEND`, `PREPEND`, `ADD` and `REPLACE` exist in the server but are not exposed
   over HTTP. They are not safe to retry.
 - **Fixed membership.** The cluster is three nodes. No membership changes and no PreVote (§9.6).
-- **Values are capped at about 1.4 KB**, because a command is read into a single 4 KB buffer.
+- **Values are capped at 1,400 bytes** by the HTTP gateway. An early version of the server expected
+  each command to arrive in one network read, and a bigger value crashed the node. 1,400 bytes fits
+  in a single TCP packet (about 1,460 bytes of data), so in practice it arrived in one read. The server
+  now reads commands in pieces and accepts up to 8 KB, but the demo keeps the smaller cap.
+- **The server doesn't check a value's size before reading it.** A client can announce a huge value,
+  send a few bytes and stop, and the connection stays open. This is safe today only because the
+  nodes' ports are firewalled and only the gateway can reach them.
 - `RaftClusterTest.shouldReadWalAfterRestart` is flaky, failing about 1 run in 3.
 
 ---
