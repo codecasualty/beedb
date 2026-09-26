@@ -25,3 +25,19 @@ beedb-server/test.txt
 .settings/
 
 deploy/
+
+# local log dumps anywhere in the tree
+logs.txt
+**/logs.txt
+
+# python (bench/)
+__pycache__/
+*.pyc
+
+# never commit credentials
+.env
+.env.*
+*.pem
+*.key
+*.priv
+id_rsa*
