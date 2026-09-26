@@ -6,7 +6,7 @@
 
 **A distributed key-value store in Java 21. It speaks the memcached text protocol, and it replicates writes with a Raft implementation written from scratch.**
 
-[![CI](https://github.com/codecasualty/memcached/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/codecasualty/memcached/actions/workflows/ci.yml)
+[![CI](https://github.com/codecasualty/beedb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/codecasualty/beedb/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Java 21](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)
 ![Maven](https://img.shields.io/badge/build-Maven-C71A36?logo=apachemaven&logoColor=white)
