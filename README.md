@@ -99,7 +99,7 @@ election when it is gone.
 **Requirements:** Java 21 and Maven.
 
 ```bash
-git clone https://github.com/codecasualty/memcached.git beedb
+git clone https://github.com/codecasualty/beedb.git
 cd beedb
 mvn -q clean package -DskipTests
 ```
